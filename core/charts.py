@@ -19,52 +19,81 @@ from .scoring import Assessment
 from .sectors import PERCENT_METRICS
 
 # --- design tokens --------------------------------------------------------
-# The categorical slots below were chosen with the palette validator against
-# this dark surface, not by eye. On the adjacent pairlist (bars, stacks, lines)
-# all five clear the lightness band, chroma floor, CVD separation and 3:1
-# contrast gates. Scatter/heat forms, which compare every pair rather than
-# neighbours, are capped at the first three slots and always direct-labelled.
-INK = "#eaf3ee"          # primary text on the dark terminal background
-MUTED = "#88a598"        # axis labels, secondary text
-GRID = "rgba(136,165,152,0.13)"
-SURFACE = "rgba(0,0,0,0)"
-SURFACE_HEX = "#0b1712"
+# Two palettes, each SELECTED for its own surface rather than flipped from the
+# other. Both were run through the palette validator: lightness band, chroma
+# floor, colourblind separation and 3:1 contrast all pass on the adjacent
+# pairlist (bars, stacks, lines) that these charts use. Forms that compare every
+# pair at once are capped at the first three slots and direct-labelled.
+PALETTES = {
+    "dark": dict(
+        ink="#eaf3ee", muted="#88a598", grid="rgba(136,165,152,0.13)",
+        surface="#0b1712",
+        series=["#1faa5e", "#9085e9", "#c98500", "#3d9fd0", "#d55181"],
+        seq=["#0d2a1c", "#12492e", "#166b41", "#1a8c53", "#1faa5e", "#4cc287", "#8ad9b0"],
+        diverging=[[0.0, "#d03b3b"], [0.5, "#2c3330"], [1.0, "#3d9fd0"]],
+    ),
+    "light": dict(
+        ink="#0e1a14", muted="#5b7a6b", grid="rgba(91,122,107,0.18)",
+        surface="#f4f6f5",
+        series=["#12855a", "#4a3aa7", "#b57500", "#2a78d6", "#c43e6d"],
+        seq=["#d7ece1", "#aedcc6", "#7fc9a6", "#4fb185", "#2b9a6b", "#12855a", "#0a6644"],
+        diverging=[[0.0, "#c0392f"], [0.5, "#e6e9e7"], [1.0, "#2a78d6"]],
+    ),
+}
 
-# categorical slots, in fixed order — never cycled, never reassigned by rank
-S1 = "#1faa5e"           # brand green
-S2 = "#9085e9"           # violet
-S3 = "#c98500"           # amber
-S4 = "#3d9fd0"           # blue
-S5 = "#d55181"           # magenta
-SERIES = [S1, S2, S3, S4, S5]
-
-# status palette — reserved, never reused as a series colour
+# status palette — fixed, never themed, never reused as a series colour
 GOOD = "#0ca30c"
 WARNING = "#fab219"
 SERIOUS = "#ec835a"
 CRITICAL = "#d03b3b"
 
-# sequential ramp (magnitude) and diverging pair (polarity, gray midpoint)
-SEQ = ["#0d2a1c", "#12492e", "#166b41", "#1a8c53", "#1faa5e", "#4cc287", "#8ad9b0"]
-DIVERGING = [[0.0, "#d03b3b"], [0.5, "#2c3330"], [1.0, "#3d9fd0"]]
+def _translucent(hex_colour: str, alpha: float) -> str:
+    """rgba() string from a #rrggbb value — for fills under a solid line."""
+    hex_colour = hex_colour.lstrip("#")
+    r, g, b = (int(hex_colour[i:i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r},{g},{b},{alpha})"
 
-# UI accents (chrome, not data)
-GREEN = S1
-GREEN_BRIGHT = "#37d67a"  # glow / chrome only, never a mark fill
-GREEN_SOFT = "rgba(31,170,94,0.18)"
-AMBER = WARNING
-RED = CRITICAL
-VIOLET = S2
 
-FONT = dict(family="Inter, 'Segoe UI', system-ui, sans-serif", size=13, color=INK)
-GREEN_DEEP = "#12492e"
+MODE = "dark"
+INK = MUTED = GRID = SURFACE_HEX = ""
+SERIES: list[str] = []
+S1 = S2 = S3 = S4 = S5 = ""
+SEQ: list[str] = []
+DIVERGING: list = []
+SURFACE = "rgba(0,0,0,0)"   # figures are transparent; the card supplies the ground
+GREEN = GREEN_SOFT = AMBER = RED = VIOLET = ""
+
+
+def set_theme(mode: str = "dark") -> None:
+    """
+    Point the chart module at one of the two validated palettes.
+
+    Figures are built fresh on every Streamlit run, so swapping these
+    module-level names before drawing is enough to retheme the whole dashboard.
+    """
+    global MODE, INK, MUTED, GRID, SURFACE_HEX, SERIES, SEQ, DIVERGING
+    global S1, S2, S3, S4, S5, GREEN, GREEN_SOFT, AMBER, RED, VIOLET
+
+    palette = PALETTES.get(mode, PALETTES["dark"])
+    MODE = mode if mode in PALETTES else "dark"
+    INK, MUTED, GRID = palette["ink"], palette["muted"], palette["grid"]
+    SURFACE_HEX = palette["surface"]
+    SERIES = list(palette["series"])
+    S1, S2, S3, S4, S5 = SERIES
+    SEQ = list(palette["seq"])
+    DIVERGING = [list(stop) for stop in palette["diverging"]]
+    GREEN, AMBER, RED, VIOLET = S1, WARNING, CRITICAL, S2
+    GREEN_SOFT = _translucent(S1, 0.18)
+
+
+FONT_FAMILY = "Inter, 'Segoe UI', system-ui, sans-serif"
 
 
 def _shell(fig: go.Figure, height: int = 320, legend: bool = False) -> go.Figure:
     """Apply the house style to any figure."""
     fig.update_layout(
         height=height,
-        font=FONT,
+        font=dict(family=FONT_FAMILY, size=13, color=INK),
         paper_bgcolor=SURFACE,
         plot_bgcolor=SURFACE,
         margin=dict(l=10, r=10, t=28, b=10),
@@ -74,7 +103,7 @@ def _shell(fig: go.Figure, height: int = 320, legend: bool = False) -> go.Figure
             font=dict(size=11, color=MUTED),
         ),
         hoverlabel=dict(
-            bgcolor="#0d1f17", bordercolor=GREEN, font=dict(color=INK, size=12)
+            bgcolor=SURFACE_HEX, bordercolor=S1, font=dict(color=INK, size=12)
         ),
     )
     fig.update_xaxes(showgrid=False, zeroline=False, tickfont=dict(color=MUTED, size=11),
@@ -146,20 +175,26 @@ def pillar_radar(result: Assessment) -> go.Figure:
 def scorecard_bars(result: Assessment) -> go.Figure:
     """Every ratio's 0-100 sub-score, coloured by band."""
     ordered = sorted(result.metrics, key=lambda m: m.score)
-    colours = [RED if m.score < 45 else AMBER if m.score < 70 else GREEN for m in ordered]
+    colours = [CRITICAL if m.score < 45 else WARNING if m.score < 70 else GOOD
+               for m in ordered]
     fig = go.Figure(go.Bar(
         x=[m.score for m in ordered],
         y=[m.metric for m in ordered],
         orientation="h",
-        marker=dict(color=colours, line=dict(width=0)),
+        # Translucent fills with a solid status-coloured edge: a long bar at full
+        # saturation reads as a heavy block and drowns the labels.
+        marker=dict(
+            color=[_translucent(c, 0.28) for c in colours],
+            line=dict(color=colours, width=1.5),
+        ),
         text=[f"{m.display(m.latest)}" for m in ordered],
         textposition="outside",
         textfont=dict(color=MUTED, size=11),
         hovertemplate="%{y}<br>Score %{x:.0f}/100<extra></extra>",
-        width=0.62,
+        width=0.5,
     ))
-    fig.add_vline(x=45, line=dict(color="rgba(255,95,86,0.5)", width=1, dash="dot"))
-    fig.add_vline(x=70, line=dict(color="rgba(55,214,122,0.5)", width=1, dash="dot"))
+    fig.add_vline(x=45, line=dict(color=CRITICAL, width=1))
+    fig.add_vline(x=70, line=dict(color=GOOD, width=1))
     fig.update_xaxes(range=[0, 118], showgrid=True, gridcolor=GRID)
     return _shell(fig, height=max(300, 34 * len(ordered)))
 
@@ -176,17 +211,17 @@ def trend_line(series: pd.Series, metric: str, benchmark: tuple[float, float] | 
         weak, strong = (b * scale for b in benchmark)
         low, high = sorted((weak, strong))
         fig.add_hrect(y0=low, y1=high, fillcolor="rgba(240,180,41,0.07)", line_width=0)
-        fig.add_hline(y=strong, line=dict(color=GREEN, width=1, dash="dot"),
+        fig.add_hline(y=strong, line=dict(color=GOOD, width=1),
                       annotation_text="sector strong", annotation_position="top left",
-                      annotation_font=dict(color=GREEN, size=10))
-        fig.add_hline(y=weak, line=dict(color=RED, width=1, dash="dot"),
+                      annotation_font=dict(color=GOOD, size=10))
+        fig.add_hline(y=weak, line=dict(color=CRITICAL, width=1),
                       annotation_text="sector weak", annotation_position="bottom left",
-                      annotation_font=dict(color=RED, size=10))
+                      annotation_font=dict(color=CRITICAL, size=10))
 
     fig.add_trace(go.Scatter(
         x=list(series.index), y=y, mode="lines+markers",
         line=dict(color=GREEN, width=2.6, shape="spline", smoothing=0.5),
-        marker=dict(size=8, color=GREEN, line=dict(color="#07130d", width=2)),
+        marker=dict(size=8, color=S1, line=dict(color=SURFACE_HEX, width=2)),
         fill="tozeroy", fillcolor=GREEN_SOFT,
         hovertemplate="%{x}: %{y:.2f}<extra></extra>",
         name=metric,
@@ -252,38 +287,69 @@ def revenue_profit_panel(model) -> go.Figure:
     return fig
 
 
-def margin_stack(model) -> go.Figure:
-    """Where every rupee of revenue goes — the common-size income statement."""
-    # A stacked common-size chart is ordinal magnitude, not identity: one hue,
-    # dark (cost) to light (what survives as profit).
-    rows = [
-        ("COGS", SEQ[1]),
-        ("Selling & General Expenses", SEQ[2]),
-        ("Depreciation", SEQ[3]),
-        ("Interest", S3),
-        ("Tax", SEQ[4]),
-        ("Net Profit", SEQ[6]),
+def cost_structure_panel(model) -> go.Figure:
+    """
+    Every line of the income statement as a % of sales, one small multiple each.
+
+    This replaces a single 100% stacked bar. COGS is ~75-90% of sales, so on a
+    shared 0-100% scale it swallowed the chart and the lines that actually move
+    the verdict — interest, depreciation, the profit that survives — were
+    invisible slivers. Each component now gets its own panel and its own
+    y-scale, so a 2%-to-5% move in interest cost reads as clearly as a move in
+    COGS.
+    """
+    components = [
+        ("COGS", S1),
+        ("Selling & General Expenses", S2),
+        ("Depreciation", S3),
+        ("Interest", S4),
+        ("Tax", S5),
+        ("Net Profit", S1),
     ]
-    fig = go.Figure()
-    plotted = False
-    for label, colour in rows:
-        series = model.common_size.loc[label] if (
+    available = []
+    for label, colour in components:
+        series = model.common_size.loc[label].dropna() if (
             not model.common_size.empty and label in model.common_size.index
         ) else pd.Series(dtype="float64")
-        series = series.dropna()
-        if series.empty:
-            continue
-        plotted = True
-        fig.add_trace(go.Bar(
-            x=list(series.index), y=series.values * 100, name=label,
-            marker=dict(color=colour, line=dict(color=SURFACE_HEX, width=2)),
-            hovertemplate=f"{label}: %{{y:.1f}}%<extra></extra>",
-        ))
-    if not plotted:
+        if not series.empty:
+            available.append((label, colour, series))
+    if not available:
         return _shell(go.Figure(), height=340)
-    fig.update_layout(barmode="stack", bargap=0.32)
+
+    columns = 3
+    rows = (len(available) + columns - 1) // columns
+    fig = make_subplots(
+        rows=rows, cols=columns, vertical_spacing=0.19, horizontal_spacing=0.09,
+        subplot_titles=[label for label, _, _ in available],
+    )
+
+    for index, (label, colour, series) in enumerate(available):
+        row, col = divmod(index, columns)
+        values = series * 100
+        fig.add_trace(go.Scatter(
+            x=list(series.index), y=values.values, name=label,
+            mode="lines+markers", line=dict(color=colour, width=2, shape="spline",
+                                            smoothing=0.4),
+            marker=dict(size=6, color=colour, line=dict(color=SURFACE_HEX, width=2)),
+            fill="tozeroy", fillcolor=_translucent(colour, 0.14),
+            hovertemplate=f"{label} · %{{x}}: %{{y:.1f}}% of sales<extra></extra>",
+        ), row=row + 1, col=col + 1)
+        # direct-label the latest value; the axis carries the rest
+        fig.add_annotation(
+            x=list(series.index)[-1], y=float(values.iloc[-1]),
+            text=f"{float(values.iloc[-1]):.1f}%", showarrow=False,
+            xanchor="right", yanchor="bottom",
+            font=dict(color=colour, size=11), row=row + 1, col=col + 1,
+        )
+
     fig.update_yaxes(ticksuffix="%")
-    return _shell(fig, height=340, legend=True)
+    fig.update_xaxes(tickfont=dict(size=9))
+    fig = _shell(fig, height=190 * rows + 60)
+    for annotation in fig.layout.annotations[:len(available)]:
+        annotation.font = dict(size=11, color=MUTED)
+        annotation.x = annotation.x - 0.02
+        annotation.xanchor = "left"
+    return fig
 
 
 def working_capital_cycle(model) -> go.Figure:
@@ -362,30 +428,47 @@ def leverage_panel(model) -> go.Figure:
     return fig
 
 
-def cashflow_bridge(model) -> go.Figure:
-    """Operating, investing and financing cash flows side by side."""
-    labels = [
-        ("Cash from Operating Activity", S1),
-        ("Cash from Investing Activity", S2),
-        ("Cash from Financing Activity", S3),
+def cashflow_panel(model) -> go.Figure:
+    """
+    Operating, investing and financing cash flow — one row each, shared x-axis.
+
+    Grouped side-by-side bars forced all three onto one scale, where a large
+    financing inflow flattened operating cash to a stub. Stacked panels keep
+    each flow readable while the shared x-axis still lines the years up, so the
+    "funded by debt, not by operations" pattern is visible at a glance.
+    """
+    flows = [
+        ("Cash from Operating Activity", "Operating", S1),
+        ("Cash from Investing Activity", "Investing", S2),
+        ("Cash from Financing Activity", "Financing", S3),
     ]
-    fig = go.Figure()
-    plotted = False
-    for label, colour in labels:
-        series = model.series(label).dropna()
-        if series.empty:
-            continue
-        plotted = True
+    available = [
+        (label, short, colour, model.series(label).dropna())
+        for label, short, colour in flows
+        if not model.series(label).dropna().empty
+    ]
+    if not available:
+        return _shell(go.Figure(), height=340)
+
+    fig = make_subplots(
+        rows=len(available), cols=1, shared_xaxes=True, vertical_spacing=0.1,
+        subplot_titles=[short for _, short, _, _ in available],
+    )
+    for index, (label, short, colour, series) in enumerate(available):
         fig.add_trace(go.Bar(
-            x=list(series.index), y=series.values, name=label.replace("Cash from ", ""),
-            marker=dict(color=colour, line=dict(width=0)),
-            hovertemplate=f"{label}: %{{y:,.0f}}<extra></extra>",
-        ))
-    if not plotted:
-        return _shell(go.Figure(), height=330)
-    fig.update_layout(barmode="group", bargap=0.3)
-    fig.add_hline(y=0, line=dict(color=GRID, width=1))
-    return _shell(fig, height=330, legend=True)
+            x=list(series.index), y=series.values, name=short,
+            marker=dict(color=colour, line=dict(color=SURFACE_HEX, width=2)),
+            hovertemplate=f"{short} · %{{x}}: %{{y:,.0f}} Cr<extra></extra>",
+        ), row=index + 1, col=1)
+        fig.add_hline(y=0, line=dict(color=GRID, width=1), row=index + 1, col=1)
+
+    fig = _shell(fig, height=140 * len(available) + 60)
+    for annotation in fig.layout.annotations[:len(available)]:
+        annotation.font = dict(size=11, color=MUTED)
+        annotation.x = 0
+        annotation.xanchor = "left"
+    fig.update_layout(bargap=0.45)
+    return fig
 
 
 def sector_lens_chart(frame: pd.DataFrame) -> go.Figure:
@@ -393,7 +476,7 @@ def sector_lens_chart(frame: pd.DataFrame) -> go.Figure:
     if frame.empty:
         return _shell(go.Figure(), height=320)
     colours = [
-        GREEN if v == "STRONG" else AMBER if v == "NEUTRAL" else RED
+        GOOD if v == "STRONG" else WARNING if v == "NEUTRAL" else CRITICAL
         for v in frame["Verdict"]
     ]
     fig = go.Figure(go.Bar(
@@ -404,8 +487,8 @@ def sector_lens_chart(frame: pd.DataFrame) -> go.Figure:
         hovertemplate="%{y}: %{x:.1f}/100<extra></extra>",
         width=0.6,
     ))
-    fig.add_vline(x=40, line=dict(color="rgba(255,95,86,0.45)", width=1, dash="dot"))
-    fig.add_vline(x=66, line=dict(color="rgba(55,214,122,0.45)", width=1, dash="dot"))
+    fig.add_vline(x=40, line=dict(color=CRITICAL, width=1))
+    fig.add_vline(x=66, line=dict(color=GOOD, width=1))
     fig.update_xaxes(range=[0, 125])
     return _shell(fig, height=max(300, 42 * len(frame)))
 
@@ -417,12 +500,12 @@ def sparkline(series: pd.Series, positive_is_good: bool = True) -> go.Figure:
         return _shell(go.Figure(), height=52)
     rising = values.iloc[-1] >= values.iloc[0]
     good = rising if positive_is_good else not rising
-    colour = GREEN if good else RED
+    colour = GOOD if good else CRITICAL
     fig = go.Figure(go.Scatter(
         x=list(range(len(values))), y=values.values, mode="lines",
         line=dict(color=colour, width=2, shape="spline"),
         fill="tozeroy",
-        fillcolor=("rgba(55,214,122,0.15)" if good else "rgba(255,95,86,0.13)"),
+        fillcolor=_translucent(colour, 0.15),
         hoverinfo="skip",
     ))
     fig.update_xaxes(visible=False)
@@ -472,8 +555,8 @@ def sparkline_svg(series: pd.Series, positive_is_good: bool = True,
 
     rising = values[-1] >= values[0]
     good = rising if positive_is_good else not rising
-    colour = GREEN if good else RED
-    fill = "rgba(55,214,122,0.16)" if good else "rgba(255,95,86,0.14)"
+    colour = GOOD if good else CRITICAL
+    fill = _translucent(colour, 0.16)
     last_x, last_y = points[-1]
 
     return (
@@ -602,3 +685,6 @@ def _finite(series: pd.Series) -> pd.Series:
         .replace([np.inf, -np.inf], np.nan)
         .dropna()
     )
+
+
+set_theme("dark")

@@ -1,0 +1,60 @@
+/* Light theme overrides.
+   Injected only when day mode is on, so the selectors need no attribute
+   scope — Streamlit strips <script>, so the theme cannot be stamped on the
+   root element from here.
+   The five series colours in this file were validated against the light
+   surface as their own set; they are not the dark palette lightened. */
+
+/* ---------- light theme ----------
+   A separate selected palette, not the dark one inverted: these five series
+   hexes were validated against the light surface on their own. */
+:root:root {
+  --bg:        #eef1f0;
+  --surface:   #ffffff;
+  --surface-2: #f4f6f5;
+  --line:      rgba(91,122,107,0.18);
+  --ink:       #0e1a14;
+  --muted:     #5b7a6b;
+  --green:     #12855a;
+  --green-dim: rgba(18,133,90,0.10);
+  --glow:      rgba(18,133,90,0.35);
+  --s1: #12855a; --s2: #4a3aa7; --s3: #b57500;
+}
+.stApp, body { background: var(--bg); }
+section[data-testid="stSidebar"] {
+  background: linear-gradient(180deg, #ffffff 0%, #f7faf8 100%);
+}
+.masthead {
+  background: linear-gradient(118deg, #ffffff 0%, #f2f7f4 55%, #eef4f1 100%);
+}
+.masthead::before {
+  background:
+    radial-gradient(closest-side, rgba(18,133,90,0.16), transparent 72%),
+    radial-gradient(closest-side, rgba(74,58,167,0.12), transparent 70%);
+}
+.side-mark {
+  background: linear-gradient(135deg, #2fbd84, var(--s1)); color: #ffffff;
+}
+.stTabs [data-baseweb="tab-list"] { background: var(--bg); }
+
+
+/* Streamlit's uploader and its button carry their own dark defaults. */
+[data-testid="stFileUploaderDropzone"] {
+  background: var(--surface-2); border-color: rgba(18,133,90,0.35);
+}
+[data-testid="stFileUploaderDropzone"] * { color: var(--ink) !important; }
+[data-testid="stFileUploaderDropzone"] button {
+  background: var(--surface) !important; color: var(--green) !important;
+  border: 1px solid rgba(18,133,90,0.35) !important;
+}
+[data-testid="stFileUploaderDropzone"] small { color: var(--muted) !important; }
+
+/* On the light surface, panels stay white at every nesting depth — the
+   dark theme's stepped surfaces would read as accidental grey boxes. */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] > div[data-testid="stMarkdown"] .card-title) div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] > div[data-testid="stMarkdown"] .card-title) { background: var(--surface); }
+
+.stTextInput input, .stSelectbox div[data-baseweb="select"] > div,
+.stTextArea textarea {
+  background: var(--surface-2) !important; color: var(--ink) !important;
+}
+[data-testid="stDataFrame"] { background: var(--surface); }

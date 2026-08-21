@@ -45,9 +45,13 @@ moves with it. That single chart is the whole thesis of the project.
 
 ## Screens
 
-| Tab | What's in it |
+The sidebar is permanent — the upload, the sector lens, the AI settings and the
+day/night switch stay on screen on every page, and the collapse control is
+removed so the nav can't be dismissed.
+
+| Page | What's in it |
 |---|---|
-| **Overview** | Revenue / profit / margin small multiples, five-pillar radar, common-size revenue stack, cash flow by activity, and a growth history grid |
+| **Dashboard** | Ten headline ratios with their sector verdict, the composite score ring, pillar meters, the analyst note, and the overview charts |
 | **Ratio deep dive** | Every ratio scored 0-100 against its sector band, leverage & solvency, working-capital cycle, and any ratio plotted through time with the sector bands shaded |
 | **Sector lens** | The same company scored under all nine sector rule books, plus a ratio correlation matrix |
 | **Statements** | The parsed sheets as heat-shaded tables, exportable to CSV |
@@ -135,6 +139,13 @@ difference between "looks like a dashboard" and "can be trusted":
   once are capped at three slots and always direct-labelled.
 - **Identity never rests on colour alone** — every multi-series chart carries a
   legend, key points are direct-labelled, and the tables carry the same numbers.
+- **Small multiples wherever one scale would lie.** The cost structure used to
+  be a 100% stacked bar, but COGS is 75-90% of sales, so everything else was an
+  invisible sliver. Each line now gets its own panel and its own y-scale.
+  Cash flow got the same treatment for the same reason.
+- **Both themes are selected, not flipped.** The light palette's five series
+  colours were validated against the light surface on their own; inverting the
+  dark set would have failed the lightness band.
 - **Motion respects `prefers-reduced-motion`.** The entrance animations, the
   score ring sweep and the meter fills all collapse to nothing for anyone who
   has asked their OS for less movement.

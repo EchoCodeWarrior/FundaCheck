@@ -23,6 +23,18 @@ from core.parser import ParseError, load_model
 from core.scoring import assess, compare_sectors
 from core.sectors import PERCENT_METRICS, SECTORS, get_sector, sector_choices
 
+# Ratios stored as a decimal that read better as a percentage than as "0.02".
+EXTRA_PERCENT_METRICS = {"CFO / Sales", "CFO / Total Assets", "CFO / Total Debt",
+                         "Dividend Payout %", "Retained Earnings%"}
+
+# Figures reported in crore in an Indian 3-statement model.
+CURRENCY_METRICS = {
+    "Sales", "Net Profit", "EBITDA", "EBIT (OPM)", "Gross Margin",
+    "Total Asset", "Total Liabilities", "Borrowings", "Reserves",
+    "Cash from Operating Activity", "Cash from Investing Activity",
+    "Cash from Financing Activity", "Net Cash Flow", "Market Capitalization",
+}
+
 APP_DIR = Path(__file__).parent
 SAMPLE = APP_DIR / "sample_data" / "3S_model_sample.xlsx"
 
@@ -37,8 +49,17 @@ st.set_page_config(
 # --------------------------------------------------------------------------
 # small UI helpers
 # --------------------------------------------------------------------------
-def inject_css() -> None:
+def inject_css(mode: str = "dark") -> None:
+    """
+    Load the stylesheet, plus the light overrides when day mode is on.
+
+    Streamlit strips <script> from markdown, so the theme cannot be stamped onto
+    the root element and switched with a CSS attribute selector — the light
+    rules are injected as their own sheet instead.
+    """
     css = (APP_DIR / "assets" / "style.css").read_text()
+    if mode == "light":
+        css += "\n" + (APP_DIR / "assets" / "light.css").read_text()
     st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
 
 
@@ -56,19 +77,24 @@ def card(title: str):
 
 
 def fmt(value: float | None, metric: str = "") -> str:
+    """Format one metric for display, in its own natural unit."""
     if value is None or pd.isna(value):
         return "n/a"
-    if metric in PERCENT_METRICS:
+    if metric in PERCENT_METRICS or metric in EXTRA_PERCENT_METRICS:
         return f"{value * 100:.1f}%"
     if "Days" in metric or "Cycle" in metric:
-        return f"{value:.0f}d"
+        return f"{value:.0f}<small> days</small>"
+    if metric in CURRENCY_METRICS:
+        return f"{value:,.0f}<small> Cr</small>"
+    if "Ratio" in metric or "Turnover" in metric or "Coverage" in metric:
+        return f"{value:.2f}<small>x</small>"
     if abs(value) >= 1000:
         return f"{value:,.0f}"
     return f"{value:.2f}"
 
 
 def kpi_tile(label: str, value: str, delta: str = "", direction: str = "",
-             spark: str = "", period: str = "") -> None:
+             spark: str = "", period: str = "", footer: str = "") -> None:
     delta_html = f'<div class="delta {direction}">{delta}</div>' if delta else ""
     # Sheets do not always run to the same last period (the ratio sheet may stop
     # at FY26 while the P&L carries a TTM column), so every tile states its own.
@@ -78,7 +104,7 @@ def kpi_tile(label: str, value: str, delta: str = "", direction: str = "",
     size_class = " value-text" if not any(ch.isdigit() for ch in value) else ""
     st.markdown(
         f'<div class="kpi"><div class="label">{label}{period_html}</div>'
-        f'<div class="value{size_class}">{value}</div>{delta_html}{spark}</div>',
+        f'<div class="value{size_class}">{value}</div>{delta_html}{spark}{footer}</div>',
         unsafe_allow_html=True,
     )
 
@@ -102,6 +128,30 @@ def chart(fig, key: str) -> None:
 # --------------------------------------------------------------------------
 # sidebar: data in, sector, LLM
 # --------------------------------------------------------------------------
+# The ten ratios the front page leads with. Order matters: profitability and
+# returns first, then risk, then momentum, cash quality and market context.
+HEADLINE_RATIOS: list[tuple[str, str, bool]] = [
+    ("Return on Equity (ROE) %", "ROE", True),
+    ("Return on Capital Employed (ROCE) %", "ROCE", True),
+    ("Net Profit Margin", "Net margin", True),
+    ("EBITDA Margin", "EBITDA margin", True),
+    ("Debt to Equity Ratio", "Debt / equity", False),
+    ("Interest Coverage Ratio", "Interest cover", True),
+    ("Sales Growth", "Sales growth", True),
+    ("CFO / Sales", "CFO / sales", True),
+    ("Cash Conversion Cycle", "Cash cycle", False),
+    ("PE Ratio", "P/E", True),
+]
+
+NAV_PAGES = [
+    ("overview", "Dashboard"),
+    ("ratios", "Ratio deep dive"),
+    ("lens", "Sector lens"),
+    ("statements", "Statements"),
+    ("qa", "Ask the analyst"),
+]
+
+
 def step(number: int, label: str) -> None:
     st.markdown(
         f'<div class="step"><span class="n">{number}</span>{label}'
@@ -119,6 +169,24 @@ def sidebar() -> tuple[object, str, LLMConfig, str]:
             unsafe_allow_html=True,
         )
 
+        # ---- navigation ----
+        st.markdown('<div class="nav-head">MENU</div>', unsafe_allow_html=True)
+        current = st.session_state.setdefault("page", "overview")
+        for key, label in NAV_PAGES:
+            active = key == current
+            if st.button(label, key=f"nav-{key}", use_container_width=True,
+                         type="primary" if active else "secondary"):
+                st.session_state.page = key
+                st.rerun()
+
+        st.markdown('<div class="nav-head">GENERAL</div>', unsafe_allow_html=True)
+        st.session_state.setdefault("dark_mode", True)
+        dark = st.toggle(
+            "Dark mode", key="dark_mode",
+            help="Both themes use their own validated palette — the light one is "
+                 "a separate set of colours, not the dark set inverted.",
+        )
+
         step(1, "Your data")
         upload = st.file_uploader(
             "3-statement model (.xlsx)", type=["xlsx", "xlsm"],
@@ -133,8 +201,7 @@ def sidebar() -> tuple[object, str, LLMConfig, str]:
 
         if upload is not None:
             source, source_label = upload, upload.name
-            size_kb = len(upload.getvalue()) / 1024
-            detail = f"{size_kb:,.0f} KB · your upload"
+            detail = f"{len(upload.getvalue()) / 1024:,.0f} KB · your upload"
         elif use_sample:
             source, source_label = SAMPLE, "3S_model_sample.xlsx"
             detail = "bundled demo · Adani Enterprises"
@@ -168,9 +235,8 @@ def sidebar() -> tuple[object, str, LLMConfig, str]:
         config = LLMConfig(provider="offline")
         if provider in PROVIDERS:
             spec = PROVIDERS[provider]
-            env_key = os.getenv(spec["key_env"], "")
             key = st.text_input(
-                "API key", value=env_key, type="password",
+                "API key", value=os.getenv(spec["key_env"], ""), type="password",
                 placeholder=f"{spec['key_env']} …", label_visibility="collapsed",
             )
             model_name = st.selectbox("Model", spec["models"], label_visibility="collapsed")
@@ -183,11 +249,12 @@ def sidebar() -> tuple[object, str, LLMConfig, str]:
             else '<span class="pill offline">● Rule-based mode</span>',
             unsafe_allow_html=True,
         )
-        st.markdown("---")
         st.caption(
             "The score is always computed by the deterministic engine. "
             "The LLM only writes the commentary, so numbers stay auditable."
         )
+
+    C.set_theme("dark" if dark else "light")
     return source, sector_key, config, source_label
 
 
@@ -219,35 +286,47 @@ def masthead(model, sector_name: str) -> None:
 
 
 def kpi_row(model, result) -> None:
-    tiles = [
-        ("Revenue", "Sales", True),
-        ("Net profit", "Net Profit", True),
-        ("EBITDA margin", "EBITDA Margin", True),
-        ("ROCE", "Return on Capital Employed (ROCE) %", True),
-        ("Debt / equity", "Debt to Equity Ratio", False),
-        ("Interest cover", "Interest Coverage Ratio", True),
-    ]
-    columns = st.columns(len(tiles))
-    for column, (label, metric, higher_better) in zip(columns, tiles):
-        series = model.series(metric).dropna()
-        with column:
-            if series.empty:
-                kpi_tile(label, "n/a")
-                continue
-            latest = float(series.iloc[-1])
-            delta_text, direction = "", ""
-            if len(series) > 1:
-                previous = float(series.iloc[-2])
-                if previous:
-                    change = (latest - previous) / abs(previous) * 100
-                    improving = change >= 0 if higher_better else change < 0
-                    direction = "up" if improving else "down"
-                    delta_text = f"{'▲' if change >= 0 else '▼'} {abs(change):.1f}% YoY"
-            kpi_tile(
-                label, fmt(latest, metric), delta_text, direction,
-                spark=C.sparkline_svg(series.tail(9), higher_better),
-                period=str(series.index[-1]),
-            )
+    """
+    The ten ratios that carry a fundamental call, five to a row.
+
+    Each tile shows the latest value, the year-on-year move, a sparkline, and —
+    where the sector defines a band for it — whether the number currently sits
+    in the strong, adequate or weak zone for THIS sector.
+    """
+    for chunk in (HEADLINE_RATIOS[:5], HEADLINE_RATIOS[5:]):
+        columns = st.columns(len(chunk))
+        for column, (metric, label, higher_better) in zip(columns, chunk):
+            series = model.series(metric).dropna()
+            with column:
+                if series.empty:
+                    kpi_tile(label, "n/a", "not in this workbook")
+                    continue
+
+                latest = float(series.iloc[-1])
+                delta_text, direction = "", ""
+                if len(series) > 1:
+                    previous = float(series.iloc[-2])
+                    if previous:
+                        change = (latest - previous) / abs(previous) * 100
+                        improving = change >= 0 if higher_better else change < 0
+                        direction = "up" if improving else "down"
+                        delta_text = f"{'▲' if change >= 0 else '▼'} {abs(change):.1f}% YoY"
+
+                scored = result.metric(metric)
+                band_html = ""
+                if scored is not None:
+                    tone = ("good" if scored.score >= 70
+                            else "warn" if scored.score >= 45 else "bad")
+                    band_html = (
+                        f'<span class="band {tone}">{scored.verdict} for sector</span>'
+                    )
+
+                kpi_tile(
+                    label, fmt(latest, metric), delta_text, direction,
+                    spark=C.sparkline_svg(series.tail(9), higher_better),
+                    period=str(series.index[-1]), footer=band_html,
+                )
+        st.write("")
 
 
 def verdict_panel(result, note: dict) -> None:
@@ -333,11 +412,11 @@ def overview_tab(model, result) -> None:
     st.write("")
     left, right = st.columns([1, 1])
     with left:
-        with card("Where every rupee of revenue goes"):
-            chart(C.margin_stack(model), key="stack")
+        with card("Where every rupee of revenue goes — each line on its own scale"):
+            chart(C.cost_structure_panel(model), key="stack")
     with right:
         with card("Cash flow by activity"):
-            chart(C.cashflow_bridge(model), key="cf")
+            chart(C.cashflow_panel(model), key="cf")
 
     st.write("")
     with card("Growth history — every measure, every year"):
@@ -485,7 +564,8 @@ def _load(file_bytes: bytes | None, path: str | None):
 
 
 def main() -> None:
-    inject_css()
+    mode = "dark" if st.session_state.get("dark_mode", True) else "light"
+    inject_css(mode)
     source, sector_key, config, source_label = sidebar()
 
     if source is None:
@@ -525,34 +605,35 @@ def main() -> None:
         st.error(str(exc))
         return
 
+    page = st.session_state.get("page", "overview")
     masthead(model, sector.name)
-    kpi_row(model, result)
+
+    if page == "overview":
+        kpi_row(model, result)
+
+        with st.spinner("Writing the analyst note…"):
+            note = analyse(result, config)
+
+        verdict_panel(result, note)
+        st.write("")
+        analyst_note(result, note)
+
+        if result.data_gaps:
+            st.caption(
+                "Metrics not found in this workbook (excluded from the score): "
+                + ", ".join(result.data_gaps)
+            )
+
     st.write("")
-
-    with st.spinner("Writing the analyst note…"):
-        note = analyse(result, config)
-
-    verdict_panel(result, note)
-    st.write("")
-    analyst_note(result, note)
-
-    if result.data_gaps:
-        st.caption(
-            "Metrics not found in this workbook (excluded from the score): "
-            + ", ".join(result.data_gaps)
-        )
-
-    st.write("")
-    tabs = st.tabs(["Overview", "Ratio deep dive", "Sector lens", "Statements", "Ask the analyst"])
-    with tabs[0]:
+    if page == "overview":
         overview_tab(model, result)
-    with tabs[1]:
+    elif page == "ratios":
         ratios_tab(model, result)
-    with tabs[2]:
+    elif page == "lens":
         sector_lens_tab(model, result)
-    with tabs[3]:
+    elif page == "statements":
         statements_tab(model)
-    with tabs[4]:
+    else:
         qa_tab(result, config)
 
 
