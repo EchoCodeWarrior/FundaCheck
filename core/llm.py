@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import requests
 
@@ -33,24 +33,40 @@ TIMEOUT_SECONDS = 60
 
 @dataclass
 class LLMConfig:
+    """
+    Connection settings for the analyst.
+
+    `api_keys` is a pool rather than a single key: free tiers rate-limit per
+    key, so a second key lets a busy session keep working instead of silently
+    dropping to the offline note.
+    """
+
     provider: str = "groq"          # "groq" | "openrouter" | "offline"
-    api_key: str = ""
+    api_keys: list[str] = field(default_factory=list)
     model: str = ""
-    temperature: float = 0.25
+    temperature: float = 0.2
+    reasoning_effort: str = "high"
+
+    @property
+    def api_key(self) -> str:
+        return self.api_keys[0] if self.api_keys else ""
 
     @property
     def is_live(self) -> bool:
-        return self.provider != "offline" and bool(self.api_key)
+        return self.provider != "offline" and bool(self.api_keys)
 
 
 PROVIDERS = {
     "groq": {
-        "label": "Groq (free tier)",
+        "label": "Groq",
         "url": "https://api.groq.com/openai/v1/chat/completions",
+        # Reasoning-capable models only: the verdict is a judgement call across
+        # a dozen interacting ratios, which is exactly where a model that thinks
+        # before answering beats one that does not.
         "models": [
-            "llama-3.3-70b-versatile",
-            "llama-3.1-8b-instant",
             "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+            "qwen/qwen3-32b",
         ],
         "key_env": "GROQ_API_KEY",
         "signup": "https://console.groq.com/keys",
@@ -69,14 +85,50 @@ PROVIDERS = {
 }
 
 
-def config_from_env(provider: str = "groq", model: str = "") -> LLMConfig:
+def _keys_from(source: dict | None, env_name: str) -> list[str]:
+    """
+    Collect API keys from Streamlit secrets or the environment.
+
+    Accepted shapes, in order: a `groq.api_keys` list, a `GROQ_API_KEYS`
+    comma-separated string, or a single `GROQ_API_KEY`. Keys are never held in
+    source — they come from the deployment's secret store.
+    """
+    keys: list[str] = []
+
+    if source:
+        block = source.get(env_name.split("_")[0].lower(), {})
+        if isinstance(block, dict):
+            listed = block.get("api_keys") or block.get("keys")
+            if isinstance(listed, (list, tuple)):
+                keys.extend(str(k) for k in listed)
+            elif isinstance(listed, str):
+                keys.extend(listed.split(","))
+        single = source.get(env_name) or source.get(f"{env_name}S")
+        if isinstance(single, str):
+            keys.extend(single.split(","))
+
+    for name in (f"{env_name}S", env_name):
+        raw = os.getenv(name, "")
+        if raw:
+            keys.extend(raw.split(","))
+
+    seen, unique = set(), []
+    for key in (k.strip() for k in keys):
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(key)
+    return unique
+
+
+def config_from_env(provider: str = "groq", model: str = "",
+                    secrets: dict | None = None) -> LLMConfig:
     spec = PROVIDERS.get(provider)
     if not spec:
         return LLMConfig(provider="offline")
-    key = os.getenv(spec["key_env"], "").strip()
+    keys = _keys_from(secrets, spec["key_env"])
     return LLMConfig(
         provider=provider,
-        api_key=key,
+        api_keys=keys,
         model=model or spec["models"][0],
     )
 
@@ -132,25 +184,47 @@ Write the analyst note as JSON."""
 
 
 def _post(config: LLMConfig, messages: list[dict]) -> str:
-    spec = PROVIDERS[config.provider]
-    headers = {
-        "Authorization": f"Bearer {config.api_key}",
-        "Content-Type": "application/json",
-    }
-    if config.provider == "openrouter":
-        headers["HTTP-Referer"] = "https://github.com/finterminal"
-        headers["X-Title"] = "FinTerminal"
+    """
+    Call the provider, trying each key in the pool.
 
+    A rate-limited or rejected key moves to the next one rather than failing the
+    request; only when every key is exhausted does the caller fall back.
+    """
+    spec = PROVIDERS[config.provider]
     payload = {
         "model": config.model,
         "messages": messages,
         "temperature": config.temperature,
-        "max_tokens": 1400,
+        "max_tokens": 2600,
     }
-    response = requests.post(spec["url"], headers=headers, json=payload, timeout=TIMEOUT_SECONDS)
-    if response.status_code != 200:
-        raise RuntimeError(f"{spec['label']} returned {response.status_code}: {response.text[:300]}")
-    return response.json()["choices"][0]["message"]["content"]
+    if config.reasoning_effort and "gpt-oss" in config.model:
+        payload["reasoning_effort"] = config.reasoning_effort
+
+    last_error = "no API key configured"
+    for key in config.api_keys:
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        if config.provider == "openrouter":
+            headers["HTTP-Referer"] = "https://github.com/fundacheck"
+            headers["X-Title"] = "FundaCheck"
+        try:
+            response = requests.post(spec["url"], headers=headers, json=payload,
+                                     timeout=TIMEOUT_SECONDS)
+        except requests.RequestException as exc:
+            last_error = str(exc)
+            continue
+
+        if response.status_code == 200:
+            message = response.json()["choices"][0]["message"]
+            # Reasoning models may return their thinking separately; the answer
+            # is always in content.
+            return message.get("content") or ""
+        if response.status_code in (401, 402, 403, 429):
+            last_error = f"{response.status_code} on one key"
+            continue        # try the next key in the pool
+        raise RuntimeError(f"{spec['label']} returned {response.status_code}: "
+                           f"{response.text[:200]}")
+
+    raise RuntimeError(f"every key failed — last error: {last_error}")
 
 
 def _extract_json(text: str) -> dict:
@@ -182,8 +256,8 @@ def offline_note(result: Assessment) -> dict:
         f"{result.verdict.lower()} band. "
         + (f"It is carried by {', '.join(strong_pillars)}. " if strong_pillars else "")
         + (f"It is held back by {', '.join(weak_pillars)}. " if weak_pillars else "")
-        + "This is the rule-based reading; connect a free LLM key for the "
-          "narrative analyst view."
+        + "This is the rule-based reading — the AI analyst could not be reached "
+          "for its narrative view."
     )
 
     return {
@@ -237,8 +311,8 @@ def answer_question(result: Assessment, question: str, config: LLMConfig) -> str
     """Free-text Q&A about the loaded company (the 'ask the analyst' box)."""
     if not config.is_live:
         return (
-            "Q&A needs a free LLM key. Add a Groq or OpenRouter key in the sidebar "
-            "(both have free tiers) and ask again."
+            "The analyst is not connected. Add Groq API keys to the app's secrets "
+            "(see the README) and ask again."
         )
     messages = [
         {

@@ -1,4 +1,4 @@
-# FinTerminal
+# FundaCheck
 
 **An AI-assisted fundamental analysis terminal.** Upload a 3-statement Excel
 model, pick the company's sector, and get an interactive dashboard plus a
@@ -24,7 +24,7 @@ depending on the industry:
 | 130-day working capital cycle | broken collections | not applicable | business as usual |
 
 A single scorecard applied to every company produces confident nonsense.
-FinTerminal keeps one rule book per sector and applies the right one.
+FundaCheck keeps one rule book per sector and applies the right one.
 
 ## What it does
 
@@ -73,22 +73,33 @@ streamlit run app.py
 The app opens at `http://localhost:8501`. A real 3-statement model ships in
 `sample_data/`, so it is usable the moment it starts — no upload needed.
 
-### Connecting a free LLM (optional)
+### Connecting the AI analyst
 
-The terminal runs fine with no API key: commentary falls back to a
-deterministic, rule-based note. To switch on the AI analyst, get one free key —
+The analyst runs on Groq's free tier with a **reasoning** model
+(`openai/gpt-oss-120b` at high reasoning effort) — the verdict is a judgement
+across a dozen interacting ratios, which is where a model that thinks before
+answering earns its place.
 
-| Provider | Free tier | Key |
-|---|---|---|
-| **Groq** | generous, very fast | <https://console.groq.com/keys> |
-| **OpenRouter** | `:free` models | <https://openrouter.ai/keys> |
-
-— and either paste it into the sidebar, or export it:
+Keys live in the deployment's secret store, never in the UI and never in this
+repository. Copy the example and fill in your own:
 
 ```bash
-export GROQ_API_KEY="gsk_..."        # or OPENROUTER_API_KEY
-streamlit run app.py
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+# then edit it — the file is gitignored
 ```
+
+```toml
+[groq]
+api_keys = ["gsk_first_key", "gsk_second_key"]
+```
+
+Two or more keys are supported: free tiers rate-limit per key, so the app moves
+to the next one instead of dropping to its offline note. `GROQ_API_KEYS`
+(comma-separated) works too. On Streamlit Cloud, paste the same block into
+**Settings → Secrets**.
+
+With no keys configured the app still works end to end — the commentary falls
+back to a deterministic, rule-based note.
 
 ## How the score is built
 
@@ -145,6 +156,10 @@ difference between "looks like a dashboard" and "can be trusted":
   interest cover gets a shaded danger zone; growth gets diverging columns;
   cash quality gets a dumbbell, because the gap between profit and cash *is*
   the question; valuation gets a strip against the company's own median.
+- **A workbook that only contains formulas still analyses.** Derived sheets
+  often carry no cached values, so they read as empty. The statements are
+  rebuilt from the raw Data Sheet and any missing benchmark ratio is computed
+  from them — the workbook's own numbers always win where it supplies them.
 - **The sector follows the company.** It is detected from the workbook — name
   first, balance-sheet shape as a fallback — and the sidebar says which signal
   decided it. The dropdown still overrides.

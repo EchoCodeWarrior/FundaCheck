@@ -1,5 +1,5 @@
 """
-FinTerminal — an AI-assisted fundamental analysis terminal.
+FundaCheck — an AI-assisted fundamental analysis dashboard.
 
 Upload a 3-statement Excel model, pick the sector, and the terminal turns it
 into an interactive dashboard plus a STRONG / NEUTRAL / WEAK verdict that is
@@ -10,6 +10,7 @@ Run it with:   streamlit run app.py
 
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import contextmanager
 from pathlib import Path
@@ -19,7 +20,8 @@ import streamlit as st
 
 from core import charts as C
 from core import ratio_charts as R
-from core.llm import PROVIDERS, LLMConfig, analyse, answer_question, config_from_env
+from core.llm import LLMConfig, analyse, answer_question, config_from_env
+from core.derive import fill_missing_ratios
 from core.parser import ParseError, load_model
 from core.scoring import assess, compare_sectors
 from core.sectors import (
@@ -42,11 +44,13 @@ CURRENCY_METRICS = {
     "Cash from Financing Activity", "Net Cash Flow", "Market Capitalization",
 }
 
+LOGGER = logging.getLogger("fundacheck")
+
 APP_DIR = Path(__file__).parent
 SAMPLE = APP_DIR / "sample_data" / "3S_model_sample.xlsx"
 
 st.set_page_config(
-    page_title="FinTerminal · Fundamental Analysis",
+    page_title="FundaCheck · Fundamental Analysis",
     page_icon="◈",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -159,6 +163,20 @@ NAV_PAGES = [
 ]
 
 
+def analyst_config() -> LLMConfig:
+    """
+    Build the analyst connection from Streamlit secrets or the environment.
+
+    Nothing about this is user-facing: the app either has keys or it does not,
+    and falls back to the deterministic note when it does not.
+    """
+    try:
+        secrets = dict(st.secrets)
+    except Exception:                       # noqa: BLE001 - no secrets file present
+        secrets = {}
+    return config_from_env("groq", secrets=secrets)
+
+
 def step(number: int, label: str) -> None:
     st.markdown(
         f'<div class="step"><span class="n">{number}</span>{label}'
@@ -167,11 +185,11 @@ def step(number: int, label: str) -> None:
     )
 
 
-def sidebar() -> tuple[object, str, LLMConfig, str]:
+def sidebar() -> tuple[object, str, str]:
     with st.sidebar:
         st.markdown(
             '<div class="side-brand"><div class="side-mark">F</div>'
-            '<div><div class="name">FinTerminal</div>'
+            '<div><div class="name">FundaCheck</div>'
             '<div class="tag">FUNDAMENTAL ANALYSIS</div></div></div>',
             unsafe_allow_html=True,
         )
@@ -197,36 +215,36 @@ def sidebar() -> tuple[object, str, LLMConfig, str]:
         step(1, "Your data")
         upload = st.file_uploader(
             "3-statement model (.xlsx)", type=["xlsx", "xlsm"],
-            label_visibility="collapsed",
-            help="Any Screener.in-style workbook with a HistoricalFS sheet.",
+            label_visibility="collapsed", key="upload",
+            help="Any Screener.in-style workbook.",
         )
+        # An upload always wins, and switches the demo off by itself.
+        if upload is not None:
+            st.session_state.demo_on = False
+
         use_sample = st.toggle(
-            "Load the demo model instead", value=upload is None,
-            disabled=not SAMPLE.exists() or upload is not None,
-            help="A real 3-statement model, so you can try the terminal before uploading.",
+            "Load the demo model", key="demo_on", disabled=upload is not None,
+            help="A real 3-statement model, if you want to try FundaCheck "
+                 "before uploading your own.",
         )
 
         if upload is not None:
             source, source_label = upload, upload.name
-            detail = f"{len(upload.getvalue()) / 1024:,.0f} KB · your upload"
         elif use_sample:
-            source, source_label = SAMPLE, "3S_model_sample.xlsx"
-            detail = "bundled demo · Adani Enterprises"
+            source, source_label = SAMPLE, "Demo model"
         else:
-            source, source_label, detail = None, "", ""
+            source, source_label = None, ""
 
         if source is not None:
             st.markdown(
                 f'<div class="loaded-chip"><span class="dot"></span>'
-                f'<span class="txt"><b>{source_label}</b><span>{detail}</span></span></div>',
+                f'<span class="txt"><b>{source_label}</b></span></div>',
                 unsafe_allow_html=True,
             )
 
         step(2, "Sector lens")
         choices = sector_choices()
         keys = [k for k, _ in choices]
-        # The sector is detected from the loaded workbook (see main()); the
-        # selectbox owns it from then on, so the user can always override.
         # Held in a plain state key rather than the widget's own key: Streamlit
         # forbids writing to a widget key once the widget exists, and detection
         # (in main(), after the workbook loads) has to be able to set it.
@@ -235,47 +253,13 @@ def sidebar() -> tuple[object, str, LLMConfig, str]:
             "Sector", options=keys, format_func=lambda k: dict(choices)[k],
             index=keys.index(preferred) if preferred in keys else 0,
             label_visibility="collapsed",
-            help="Benchmarks and pillar weights change with the sector you pick.",
+            help="Benchmarks and pillar weights change with the sector.",
         )
         st.session_state.sector_pref = sector_key
-        why = st.session_state.get("sector_why", "")
-        if why:
-            st.markdown(
-                f'<p class="detected">Auto-detected · {why}</p>', unsafe_allow_html=True
-            )
         st.caption(get_sector(sector_key).notes)
 
-        step(3, "AI analyst")
-        provider = st.selectbox(
-            "Provider", options=["groq", "openrouter", "offline"],
-            format_func=lambda p: PROVIDERS[p]["label"] if p in PROVIDERS else "Offline (no key)",
-            label_visibility="collapsed",
-        )
-
-        config = LLMConfig(provider="offline")
-        if provider in PROVIDERS:
-            spec = PROVIDERS[provider]
-            key = st.text_input(
-                "API key", value=os.getenv(spec["key_env"], ""), type="password",
-                placeholder=f"{spec['key_env']} …", label_visibility="collapsed",
-            )
-            model_name = st.selectbox("Model", spec["models"], label_visibility="collapsed")
-            config = LLMConfig(provider=provider, api_key=key.strip(), model=model_name)
-            if not key:
-                st.caption(f"Free key: {spec['signup']}")
-
-        st.markdown(
-            '<span class="pill live">● LLM connected</span>' if config.is_live
-            else '<span class="pill offline">● Rule-based mode</span>',
-            unsafe_allow_html=True,
-        )
-        st.caption(
-            "The score is always computed by the deterministic engine. "
-            "The LLM only writes the commentary, so numbers stay auditable."
-        )
-
     C.set_theme("dark" if dark else "light")
-    return source, sector_key, config, source_label
+    return source, sector_key, source_label
 
 
 # --------------------------------------------------------------------------
@@ -617,11 +601,13 @@ def _load(file_bytes: bytes | None, path: str | None):
 def main() -> None:
     mode = "dark" if st.session_state.get("dark_mode", True) else "light"
     inject_css(mode)
-    source, sector_key, config, source_label = sidebar()
+    source, sector_key, source_label = sidebar()
+    # Keys live in the deployment's secret store, never in the UI or the repo.
+    config = analyst_config()
 
     if source is None:
         st.markdown(
-            '<div class="masthead"><div><h1><span class="brand-dot"></span>FinTerminal</h1>'
+            '<div class="masthead"><div><h1><span class="brand-dot"></span>FundaCheck</h1>'
             '<div class="sub">UPLOAD A 3-STATEMENT MODEL TO BEGIN</div></div></div>',
             unsafe_allow_html=True,
         )
@@ -649,6 +635,12 @@ def main() -> None:
         st.error(f"Unexpected problem reading the workbook: {exc}")
         return
 
+    # Fill in any benchmark ratio the workbook did not supply, computed from
+    # its own statements, so a formulas-only export still analyses.
+    derived = fill_missing_ratios(model)
+    if derived:
+        LOGGER.info("derived %d ratios for %s", len(derived), model.company)
+
     # A new workbook gets its sector detected once; after that the dropdown is
     # the source of truth, so changing it by hand sticks.
     if st.session_state.get("detected_for") != model.company:
@@ -661,7 +653,7 @@ def main() -> None:
         })
         st.session_state.detected_for = model.company
         st.session_state.sector_pref = detected
-        st.session_state.sector_why = why
+        LOGGER.info("sector detected for %s: %s (%s)", model.company, detected, why)
         st.rerun()
 
     sector = get_sector(sector_key)

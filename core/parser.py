@@ -55,6 +55,8 @@ class FinancialModel:
     ratios: pd.DataFrame = field(default_factory=pd.DataFrame)
     common_size: pd.DataFrame = field(default_factory=pd.DataFrame)
     meta: dict[str, Any] = field(default_factory=dict)
+    # True when the statements had to be rebuilt from the raw Data Sheet
+    rebuilt_from_data_sheet: bool = False
     # metric label -> the section it was found under ("PROFITABILITY & MARGINS")
     sections: dict[str, str] = field(default_factory=dict)
 
@@ -254,6 +256,132 @@ def _company_from_title(title: str) -> str:
     return _clean_label(title).title() or "Unknown Company"
 
 
+
+# --------------------------------------------------------------------------
+# rebuilding statements from the raw Data Sheet
+# --------------------------------------------------------------------------
+# The derived sheets (HistoricalFS, Ratio Analysis) are grids of formulas. Some
+# exports carry no cached results, so those sheets read as empty even though the
+# Data Sheet next to them holds every raw number. This rebuilds the statements
+# from those raw values so such a workbook still analyses.
+DATA_SHEET_ALIASES: dict[str, str] = {
+    "sales": "Sales",
+    "netprofit": "Net Profit",
+    "profitbeforetax": "Earnings Before Tax",
+    "tax": "Tax",
+    "interest": "Interest",
+    "depreciation": "Depreciation",
+    "otherincome": "Other Income ",
+    "equitysharecapital": "Equity Share Capital",
+    "reserves": "Reserves",
+    "borrowings": "Borrowings",
+    "otherliabilities": "Other Liabilities",
+    "netblock": "Net Block",
+    "capitalworkinprogress": "Capital Work in Progress",
+    "investments": "Investments",
+    "receivables": "Receivables",
+    "inventory": "Inventory",
+    "cashbank": "Cash & Bank",
+    "cashfromoperatingactivity": "Cash from Operating Activity",
+    "cashfrominvestingactivity": "Cash from Investing Activity",
+    "cashfromfinancingactivity": "Cash from Financing Activity",
+    "netcashflow": "Net Cash Flow",
+    "noofequityshares": "No of Equity Shares",
+}
+
+# Everything that sits above EBITDA in an Indian P&L.
+OPERATING_COST_KEYS = (
+    "rawmaterialcost", "changeininventory", "powerandfuel", "othermfrexp",
+    "employeecost", "sellingandadmin", "otherexpenses", "expenses",
+)
+
+
+def _parse_data_sheet_statements(raw: pd.DataFrame) -> pd.DataFrame:
+    """
+    Read the Data Sheet's raw blocks into one metric-by-year frame.
+
+    Each block ("PROFIT & LOSS", "BALANCE SHEET", "CASH FLOW:") restates its own
+    "Report Date" header, so the year columns are picked up per block. The
+    quarterly block is skipped: its dates are quarters, not financial years.
+    """
+    records: dict[str, dict[str, float]] = {}
+    costs: dict[str, dict[str, float]] = {}
+    years: list[str] = []
+    in_quarters = False
+
+    for _, row in raw.iterrows():
+        cells = row.tolist()
+        label_cell = next(
+            (c for c in cells if c is not None and not (isinstance(c, float) and pd.isna(c))),
+            None,
+        )
+        if label_cell is None:
+            continue
+        label = _clean_label(label_cell)
+        key = _norm(label)
+        start = cells.index(label_cell) + 1
+
+        if key in ("quarters",):
+            in_quarters = True
+            continue
+        if key in ("balancesheet", "cashflow", "profitloss", "price", "derived", "meta"):
+            in_quarters = False
+            continue
+        if key == "reportdate":
+            if not in_quarters:
+                years = [
+                    _year_label(v) for v in cells[start:]
+                    if v is not None and not (isinstance(v, float) and pd.isna(v))
+                ]
+            continue
+        if in_quarters or not years:
+            continue
+
+        values = [_to_float(v) for v in cells[start:start + len(years)]]
+        if all(v is None for v in values):
+            continue
+        row_map = {y: v for y, v in zip(years, values) if v is not None}
+
+        if key in OPERATING_COST_KEYS:
+            costs[label] = row_map
+        elif key in DATA_SHEET_ALIASES:
+            records.setdefault(DATA_SHEET_ALIASES[key], {}).update(row_map)
+
+    if not records:
+        return pd.DataFrame()
+
+    frame = pd.DataFrame.from_dict(records, orient="index")
+    frame = frame.loc[:, [c for c in frame.columns if _is_period(c)]]
+    frame = frame.reindex(sorted(frame.columns, key=lambda c: (len(c), c)), axis=1)
+
+    # EBITDA is not reported directly: it is sales less the operating cost lines.
+    if costs and "Sales" in frame.index:
+        cost_frame = pd.DataFrame.from_dict(costs, orient="index").reindex(
+            columns=frame.columns
+        )
+        total_cost = cost_frame.sum(axis=0, min_count=1)
+        frame.loc["COGS"] = total_cost
+        frame.loc["EBITDA"] = frame.loc["Sales"] - total_cost
+        if "Depreciation" in frame.index:
+            frame.loc["EBIT (OPM)"] = frame.loc["EBITDA"] - frame.loc["Depreciation"]
+
+    if "Equity Share Capital" in frame.index and "Reserves" in frame.index:
+        frame.loc["Total Asset"] = frame.loc[
+            ["Equity Share Capital", "Reserves", "Borrowings", "Other Liabilities"]
+        ].reindex(["Equity Share Capital", "Reserves", "Borrowings",
+                   "Other Liabilities"]).sum(axis=0, min_count=1)
+
+    if "Net Profit" in frame.index and "No of Equity Shares" in frame.index:
+        shares = frame.loc["No of Equity Shares"].replace(0, pd.NA)
+        # Screener stores the absolute share count; the statements use crore.
+        if shares.dropna().max() and float(shares.dropna().max()) > 1e6:
+            shares = shares / 1e7
+        frame.loc["No of Equity Shares"] = shares
+        frame.loc["Earnings per Share"] = frame.loc["Net Profit"] / shares
+
+    return frame.dropna(axis=1, how="all")
+
+
 # --------------------------------------------------------------------------
 # public entry point
 # --------------------------------------------------------------------------
@@ -302,6 +430,18 @@ def load_model(source: Any) -> FinancialModel:
     data_sheet = _find_sheet(book, "data")
     if data_sheet is not None:
         model.meta = _parse_data_sheet(data_sheet)
+
+        # A workbook whose formula sheets carry no cached values parses to
+        # almost nothing. The Data Sheet holds the raw numbers, so rebuild from
+        # it rather than failing the upload.
+        if len(model.historical) < 8:
+            rebuilt = _parse_data_sheet_statements(data_sheet)
+            if not rebuilt.empty:
+                model.historical = rebuilt
+                model.years = list(rebuilt.columns)
+                model.rebuilt_from_data_sheet = True
+                for label in rebuilt.index:
+                    model.sections.setdefault(label, "REBUILT FROM DATA SHEET")
 
     model.company = model.meta.get("company") or _company_from_title(title)
     return model
