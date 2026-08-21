@@ -1,0 +1,180 @@
+/* FinTerminal — dark analyst terminal theme.
+   Green signal palette borrowed from the reference dashboards, on a near-black
+   surface so the charts carry the colour and the chrome stays quiet. */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+
+:root {
+  --bg:        #060d0a;
+  --surface:   #0b1712;
+  --surface-2: #102019;
+  --line:      rgba(125,156,140,0.16);
+  --ink:       #e8f2ec;
+  --muted:     #7d9c8c;
+  --green:     #37d67a;
+  --green-dim: rgba(55,214,122,0.14);
+  --amber:     #f0b429;
+  --red:       #ff5f56;
+  --violet:    #8b7cf6;
+  --radius:    16px;
+}
+
+.stApp { background: var(--bg); }
+
+html, body, [class*="css"], .stMarkdown, p, span, label {
+  font-family: 'Inter', system-ui, sans-serif;
+  color: var(--ink);
+}
+
+/* quiet down Streamlit's own chrome */
+#MainMenu, footer, header { visibility: hidden; }
+.block-container { padding: 1.4rem 2.2rem 3rem; max-width: 1500px; }
+
+/* ---------- masthead ---------- */
+.masthead {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1.5rem; padding: 1.15rem 1.5rem; margin-bottom: 1.1rem;
+  background: linear-gradient(115deg, #0d2018 0%, #0a1a13 55%, #081411 100%);
+  border: 1px solid var(--line); border-radius: var(--radius);
+  position: relative; overflow: hidden;
+}
+.masthead::after {
+  content: ""; position: absolute; inset: 0;
+  background: radial-gradient(680px 130px at 88% 0%, rgba(55,214,122,0.16), transparent 70%);
+  pointer-events: none;
+}
+.masthead h1 {
+  margin: 0; font-size: 1.55rem; font-weight: 700; letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.masthead .sub {
+  margin-top: .3rem; font-size: .82rem; color: var(--muted);
+  font-family: 'JetBrains Mono', monospace; letter-spacing: .04em;
+}
+.brand-dot {
+  display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+  background: var(--green); margin-right: .55rem; vertical-align: middle;
+  box-shadow: 0 0 12px var(--green);
+}
+
+/* ---------- cards ----------
+   st.container(border=True) renders a stVerticalBlockBorderWrapper, which is
+   what we style as the panel surface. */
+div[data-testid="stVerticalBlockBorderWrapper"] {
+  background: var(--surface);
+  border: 1px solid var(--line) !important;
+  border-radius: var(--radius) !important;
+  padding: .35rem .4rem;
+}
+div[data-testid="stVerticalBlockBorderWrapper"]
+  div[data-testid="stVerticalBlockBorderWrapper"] {
+  background: var(--surface-2);
+}
+.card {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 1.05rem 1.2rem; height: 100%;
+}
+.card-title {
+  font-size: .72rem; font-weight: 600; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: .55rem;
+}
+
+/* KPI tile */
+.kpi {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: .95rem 1.05rem;
+  transition: border-color .18s ease, transform .18s ease;
+}
+.kpi:hover { border-color: rgba(55,214,122,0.42); transform: translateY(-2px); }
+.kpi .label {
+  font-size: .68rem; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--muted); font-weight: 600;
+}
+.kpi .value {
+  font-size: 1.75rem; font-weight: 700; line-height: 1.15; margin-top: .35rem;
+  font-family: 'JetBrains Mono', monospace; letter-spacing: -0.02em;
+}
+.kpi .label .period {
+  float: right; font-family: 'JetBrains Mono', monospace; font-weight: 500;
+  letter-spacing: .06em; opacity: .65;
+}
+.kpi .delta { font-size: .76rem; margin-top: .3rem; color: var(--muted); }
+.kpi .delta.up   { color: var(--green); }
+.kpi .delta.down { color: var(--red); }
+
+/* ---------- verdict banner ---------- */
+.verdict {
+  border-radius: var(--radius); padding: 1.3rem 1.5rem;
+  border: 1px solid var(--line); background: var(--surface);
+  position: relative; overflow: hidden;
+}
+.verdict .tag {
+  display: inline-block; font-family: 'JetBrains Mono', monospace;
+  font-size: .7rem; letter-spacing: .18em; padding: .3rem .7rem;
+  border-radius: 999px; text-transform: uppercase; font-weight: 600;
+}
+.verdict h2 {
+  margin: .6rem 0 .35rem; font-size: 1.9rem; font-weight: 700;
+  letter-spacing: -0.025em;
+}
+.verdict p { margin: 0; color: var(--muted); font-size: .9rem; line-height: 1.55; }
+
+/* ---------- pill / chips ---------- */
+.pill {
+  display: inline-block; padding: .28rem .68rem; border-radius: 999px;
+  font-size: .72rem; font-weight: 600; letter-spacing: .04em;
+  border: 1px solid var(--line); color: var(--muted); margin-right: .4rem;
+}
+.pill.live   { color: var(--green);  border-color: rgba(55,214,122,0.4);  background: var(--green-dim); }
+.pill.offline{ color: var(--amber);  border-color: rgba(240,180,41,0.35); background: rgba(240,180,41,0.1); }
+
+/* ---------- analyst note ---------- */
+.note-block {
+  background: var(--surface-2); border-left: 3px solid var(--green);
+  border-radius: 10px; padding: .95rem 1.15rem; margin-bottom: .8rem;
+}
+.note-block.risk { border-left-color: var(--red); }
+.note-block.watch { border-left-color: var(--violet); }
+.note-block ul { margin: .4rem 0 0; padding-left: 1.15rem; }
+.note-block li { margin-bottom: .38rem; font-size: .89rem; line-height: 1.5; color: var(--ink); }
+
+/* ---------- sidebar ---------- */
+section[data-testid="stSidebar"] {
+  background: var(--surface); border-right: 1px solid var(--line);
+}
+section[data-testid="stSidebar"] .block-container { padding-top: 1.6rem; }
+
+/* ---------- tabs ---------- */
+.stTabs [data-baseweb="tab-list"] { gap: .35rem; border-bottom: 1px solid var(--line); }
+.stTabs [data-baseweb="tab"] {
+  background: transparent; border-radius: 10px 10px 0 0; padding: .55rem 1rem;
+  color: var(--muted); font-size: .85rem; font-weight: 600;
+}
+.stTabs [aria-selected="true"] { background: var(--surface); color: var(--green); }
+
+/* ---------- buttons & inputs ---------- */
+.stButton > button {
+  background: var(--green-dim); color: var(--green);
+  border: 1px solid rgba(55,214,122,0.4); border-radius: 10px;
+  font-weight: 600; padding: .5rem 1.15rem; transition: all .18s ease;
+}
+.stButton > button:hover {
+  background: var(--green); color: #051009; border-color: var(--green);
+}
+.stTextInput input, .stSelectbox div[data-baseweb="select"] > div,
+.stTextArea textarea {
+  background: var(--surface-2) !important; border-color: var(--line) !important;
+  color: var(--ink) !important; border-radius: 10px !important;
+}
+[data-testid="stFileUploaderDropzone"] {
+  background: var(--surface-2); border: 1px dashed rgba(55,214,122,0.35);
+  border-radius: var(--radius);
+}
+
+/* ---------- dataframe ---------- */
+[data-testid="stDataFrame"] { border: 1px solid var(--line); border-radius: 12px; }
+
+.caption-mono {
+  font-family: 'JetBrains Mono', monospace; font-size: .72rem;
+  color: var(--muted); letter-spacing: .05em;
+}
