@@ -474,3 +474,77 @@ section[data-testid="stSidebar"] .stButton > button > div,
 section[data-testid="stSidebar"] .stButton > button p {
   width: 100%; text-align: left; justify-content: flex-start;
 }
+
+/* ==========================================================================
+   v4 — bento grid, softer surfaces, scroll-reveal
+   ========================================================================== */
+
+/* Less terminal, more product: rounder corners, softer contrast, real
+   elevation instead of hairline boxes on black. */
+:root {
+  --bg:        #0a1410;
+  --surface:   #0f1d17;
+  --surface-2: #14261e;
+  --line:      rgba(136,165,152,0.11);
+  --radius:    20px;
+  --shadow:    0 18px 40px -30px rgba(0,0,0,0.9);
+}
+
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"]
+  > div[data-testid="stMarkdown"] .card-title) {
+  border-radius: var(--radius) !important;
+  box-shadow: var(--shadow);
+  padding: 1rem 1.1rem !important;
+  margin-bottom: .85rem;
+}
+.kpi { border-radius: 16px; box-shadow: var(--shadow); }
+
+/* tile subtitle — the one line that says what the chart is for */
+.tile-sub {
+  margin: -.25rem 0 .35rem; font-size: .78rem; line-height: 1.45;
+  color: var(--muted);
+}
+.card-title { letter-spacing: .1em; font-size: .7rem; }
+
+/* Scroll-reveal. Uses a scroll-driven animation timeline where the browser
+   supports it, so there is no JS (Streamlit strips <script> anyway) and no
+   layout thrash. Everything stays visible when it is unsupported. */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"]
+      > div[data-testid="stMarkdown"] .card-title) {
+      animation: reveal linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 42%;
+    }
+  }
+}
+@keyframes reveal {
+  from { opacity: 0; transform: translateY(26px) scale(.985); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Hover: the tile lifts and its chart gains a touch of contrast. */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"]
+  > div[data-testid="stMarkdown"] .card-title):hover {
+  transform: translateY(-3px);
+  box-shadow: 0 26px 50px -30px var(--glow), var(--shadow);
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"]
+  > div[data-testid="stMarkdown"] .card-title) {
+  transition: transform .22s cubic-bezier(.22,.9,.3,1),
+              box-shadow .22s ease, border-color .22s ease;
+}
+.js-plotly-plot { transition: filter .22s ease; }
+div[data-testid="stVerticalBlock"]:hover > div .js-plotly-plot { filter: saturate(1.12); }
+
+/* the auto-detected sector note */
+.detected {
+  margin: .35rem 0 .1rem; font-size: .7rem; color: var(--green);
+  background: var(--green-dim); border: 1px solid rgba(31,170,94,0.25);
+  border-radius: 8px; padding: .3rem .55rem; line-height: 1.4;
+}
+
+/* masthead reads as a page header now, not a system banner */
+.masthead { border-radius: var(--radius); box-shadow: var(--shadow); }
+.masthead .sub { letter-spacing: .09em; }

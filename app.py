@@ -18,10 +18,17 @@ import pandas as pd
 import streamlit as st
 
 from core import charts as C
+from core import ratio_charts as R
 from core.llm import PROVIDERS, LLMConfig, analyse, answer_question, config_from_env
 from core.parser import ParseError, load_model
 from core.scoring import assess, compare_sectors
-from core.sectors import PERCENT_METRICS, SECTORS, get_sector, sector_choices
+from core.sectors import (
+    PERCENT_METRICS,
+    SECTORS,
+    detect_sector,
+    get_sector,
+    sector_choices,
+)
 
 # Ratios stored as a decimal that read better as a percentage than as "0.02".
 EXTRA_PERCENT_METRICS = {"CFO / Sales", "CFO / Total Assets", "CFO / Total Debt",
@@ -218,11 +225,24 @@ def sidebar() -> tuple[object, str, LLMConfig, str]:
         step(2, "Sector lens")
         choices = sector_choices()
         keys = [k for k, _ in choices]
+        # The sector is detected from the loaded workbook (see main()); the
+        # selectbox owns it from then on, so the user can always override.
+        # Held in a plain state key rather than the widget's own key: Streamlit
+        # forbids writing to a widget key once the widget exists, and detection
+        # (in main(), after the workbook loads) has to be able to set it.
+        preferred = st.session_state.setdefault("sector_pref", "generic")
         sector_key = st.selectbox(
             "Sector", options=keys, format_func=lambda k: dict(choices)[k],
-            index=keys.index("infrastructure"), label_visibility="collapsed",
+            index=keys.index(preferred) if preferred in keys else 0,
+            label_visibility="collapsed",
             help="Benchmarks and pillar weights change with the sector you pick.",
         )
+        st.session_state.sector_pref = sector_key
+        why = st.session_state.get("sector_why", "")
+        if why:
+            st.markdown(
+                f'<p class="detected">Auto-detected · {why}</p>', unsafe_allow_html=True
+            )
         st.caption(get_sector(sector_key).notes)
 
         step(3, "AI analyst")
@@ -400,31 +420,62 @@ def analyst_note(result, note: dict) -> None:
     )
 
 
+def bento(title: str, subtitle: str, key: str, figure, span: str = "") -> None:
+    """One bento tile: a titled card wrapping a single chart."""
+    with card(title):
+        if subtitle:
+            st.markdown(f'<p class="tile-sub">{subtitle}</p>', unsafe_allow_html=True)
+        chart(figure, key=key)
+
+
 def overview_tab(model, result) -> None:
+    """
+    The ten headline ratios, one chart each, in a bento grid.
+
+    Tile sizes are deliberately uneven: the ratios that carry the most weight in
+    a fundamental call get the wider tiles, so the layout itself ranks them.
+    """
+    # Row 1 — the two return ratios, side by side and directly comparable
     left, right = st.columns([1, 1])
     with left:
-        with card("Revenue, profit & margin"):
-            chart(C.revenue_profit_panel(model), key="rev")
+        bento("Return on equity", "How hard shareholder money is working",
+              "roe", R.return_trend(model, result, "Return on Equity (ROE) %"))
     with right:
-        with card("Five-pillar profile"):
-            chart(C.pillar_radar(result), key="radar")
+        bento("Return on capital employed", "The same question, but debt counts too",
+              "roce", R.return_trend(model, result, "Return on Capital Employed (ROCE) %"))
 
-    st.write("")
+    # Row 2 — margins: the ladder, then the one number against its target
+    left, right = st.columns([1.35, 1])
+    with left:
+        bento("Sales to profit", "Which rung of the ladder loses the most",
+              "ladder", R.profit_ladder(model))
+    with right:
+        bento("EBITDA margin vs sector", "Bar is today, tick is the 3-year average",
+              "bullet", R.margin_bullet(model, result))
+        bento("Momentum", "Growth above the line, contraction below",
+              "growth", R.growth_columns(model, "Sales Growth"))
+
+    # Row 3 — risk: how it is funded, and whether it can service that funding
     left, right = st.columns([1, 1])
     with left:
-        with card("Where every rupee of revenue goes — each line on its own scale"):
-            chart(C.cost_structure_panel(model), key="stack")
+        bento("Funding mix", "Share of capital that is borrowed, year by year",
+              "mix", R.funding_mix(model))
     with right:
-        with card("Cash flow by activity"):
-            chart(C.cashflow_panel(model), key="cf")
+        bento("Interest cover", "Distance from the line where profit stops covering interest",
+              "cover", R.interest_cover_zone(model, result))
 
-    st.write("")
-    with card("Growth history — every measure, every year"):
-        st.caption(
-            "Blue is growth, red is contraction, gray sits at zero. Reading across "
-            "a row shows whether a good year was the trend or the exception."
-        )
-        chart(C.growth_heatmap(model), key="heat")
+    # Row 4 — cash: quality, then the working-capital cycle behind it
+    left, right = st.columns([1, 1.15])
+    with left:
+        bento("Earnings quality", "The gap between reported profit and actual cash",
+              "cashq", R.cash_quality_dumbbell(model))
+    with right:
+        bento("Cash conversion cycle", "Collected and held, minus what suppliers fund",
+              "ccc", R.cash_cycle_bridge(model))
+
+    # Row 5 — what the market already thinks
+    bento("Valuation", "Today's P/E against the company's own history",
+          "pe", R.valuation_strip(model))
 
 
 def ratios_tab(model, result) -> None:
@@ -597,6 +648,21 @@ def main() -> None:
     except Exception as exc:                       # noqa: BLE001
         st.error(f"Unexpected problem reading the workbook: {exc}")
         return
+
+    # A new workbook gets its sector detected once; after that the dropdown is
+    # the source of truth, so changing it by hand sticks.
+    if st.session_state.get("detected_for") != model.company:
+        detected, why = detect_sector(model.company, {
+            "Debt to Equity Ratio": model.latest("Debt to Equity Ratio"),
+            "Interest % Sales": model.latest("Interest % Sales"),
+            "EBITDA Margin": model.latest("EBITDA Margin"),
+            "Fixed Asset Turnover": model.latest("Fixed Asset Turnover"),
+            "Net Profit Margin": model.latest("Net Profit Margin"),
+        })
+        st.session_state.detected_for = model.company
+        st.session_state.sector_pref = detected
+        st.session_state.sector_why = why
+        st.rerun()
 
     sector = get_sector(sector_key)
     try:

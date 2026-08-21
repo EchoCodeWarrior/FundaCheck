@@ -252,3 +252,94 @@ def get_sector(key: str) -> SectorProfile:
 def sector_choices() -> list[tuple[str, str]]:
     """(key, display name) pairs for the sidebar dropdown."""
     return [(key, profile.name) for key, profile in SECTORS.items()]
+
+
+# --------------------------------------------------------------------------
+# sector detection
+# --------------------------------------------------------------------------
+# Words that reliably name a sector inside an Indian listed-company name.
+NAME_HINTS: list[tuple[str, tuple[str, ...]]] = [
+    ("banking", ("bank", "finserv", "financ", "nbfc", "capital first", "housing fin",
+                 "insurance", "life ins", "general ins", "credit", "lending", "amc",
+                 "mutual fund", "securities")),
+    ("it_services", ("infosys", "tcs", "consultancy services", "wipro", "hcl", "tech mahindra",
+                     "mindtree", "ltimindtree", "software", "systems", "infotech",
+                     "technolog", "digital", "cyient", "persistent", "mphasis", "coforge")),
+    ("pharma", ("pharma", "labs", "laboratories", "healthcare", "hospital", "drug",
+                "biocon", "cipla", "lupin", "aurobindo", "divis", "torrent pharma",
+                "life science", "medic")),
+    ("fmcg", ("consumer", "hindustan unilever", "nestle", "britannia", "dabur", "marico",
+              "godrej consumer", "colgate", "emami", "tata consumer", "foods", "beverage",
+              "dairy", "amul")),
+    ("infrastructure", ("infra", "power", "energy", "transmission", "grid", "ports",
+                        "logistics", "construction", "engineer", "larsen", "ntpc",
+                        "adani", "gail", "oil", "petroleum", "gas", "utilities",
+                        "renewab", "solar", "wind")),
+    ("realestate", ("realty", "estate", "properties", "developers", "housing dev",
+                    "dlf", "oberoi realty", "prestige", "brigade", "sobha")),
+    ("retail", ("retail", "trent", "avenue supermart", "dmart", "shoppers", "fashion",
+                "apparel", "jubilant food", "westlife", "e-commerce", "mall")),
+    ("manufacturing", ("steel", "cement", "motors", "auto", "chemical", "industries",
+                       "industrial", "metals", "alumini", "copper", "fertil", "paints",
+                       "tyre", "bearing", "forge", "engine", "manufact", "textile",
+                       "polymer", "plastic", "glass", "paper")),
+]
+
+
+def _structure_guess(metrics: dict[str, float | None]) -> str:
+    """
+    Fall back to the shape of the balance sheet when the name says nothing.
+
+    These are deliberately coarse: they only need to beat "always infrastructure",
+    and the user can override the answer in one click.
+    """
+    debt_equity = metrics.get("Debt to Equity Ratio")
+    interest_pct = metrics.get("Interest % Sales")
+    ebitda_margin = metrics.get("EBITDA Margin")
+    fixed_turnover = metrics.get("Fixed Asset Turnover")
+    net_margin = metrics.get("Net Profit Margin")
+
+    # Lenders borrow as their raw material: leverage and interest cost are both
+    # extreme in a way no operating company matches.
+    if debt_equity is not None and debt_equity > 4.5:
+        if interest_pct is None or interest_pct > 0.2:
+            return "banking"
+
+    # Asset-light, high-margin, barely any debt reads as services.
+    if (ebitda_margin is not None and ebitda_margin > 0.18
+            and (debt_equity is None or debt_equity < 0.25)
+            and (fixed_turnover is None or fixed_turnover > 2.0)):
+        return "it_services"
+
+    # Heavy balance sheet, thin margins, meaningful debt reads as capital-intensive.
+    if (debt_equity is not None and debt_equity > 0.9
+            and (net_margin is None or net_margin < 0.08)):
+        return "infrastructure"
+
+    if fixed_turnover is not None and fixed_turnover > 3.0 and (
+            net_margin is None or net_margin < 0.06):
+        return "retail"
+
+    return "generic"
+
+
+def detect_sector(company: str, metrics: dict[str, float | None] | None = None
+                  ) -> tuple[str, str]:
+    """
+    Guess a company's sector from its name, falling back to its financials.
+
+    Returns (sector key, how it was decided) so the UI can say why — a guess the
+    user cannot see the reasoning for is worse than no guess at all.
+    """
+    name = (company or "").lower()
+    for key, hints in NAME_HINTS:
+        for hint in hints:
+            if hint in name:
+                return key, f"matched “{hint}” in the company name"
+
+    if metrics:
+        guess = _structure_guess(metrics)
+        if guess != "generic":
+            return guess, "inferred from the balance-sheet shape"
+
+    return "generic", "no clear signal — pick the sector yourself"

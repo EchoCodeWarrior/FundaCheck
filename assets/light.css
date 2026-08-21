@@ -58,3 +58,12 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] >
   background: var(--surface-2) !important; color: var(--ink) !important;
 }
 [data-testid="stDataFrame"] { background: var(--surface); }
+
+/* Softer light surfaces to match the v4 shell. */
+:root:root {
+  --bg:        #f2f5f4;
+  --surface:   #ffffff;
+  --surface-2: #f6f8f7;
+  --line:      rgba(91,122,107,0.14);
+  --shadow:    0 16px 34px -28px rgba(14,26,20,0.45);
+}
