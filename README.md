@@ -47,7 +47,7 @@ moves with it. That single chart is the whole thesis of the project.
 
 | Tab | What's in it |
 |---|---|
-| **Overview** | Revenue/profit/margin combo, five-pillar radar, common-size revenue waterfall, cash flow by activity |
+| **Overview** | Revenue / profit / margin small multiples, five-pillar radar, common-size revenue stack, cash flow by activity, and a growth history grid |
 | **Ratio deep dive** | Every ratio scored 0-100 against its sector band, leverage & solvency, working-capital cycle, and any ratio plotted through time with the sector bands shaded |
 | **Sector lens** | The same company scored under all nine sector rule books, plus a ratio correlation matrix |
 | **Statements** | The parsed sheets as heat-shaded tables, exportable to CSV |
@@ -114,6 +114,31 @@ Design decisions worth defending in an interview:
 Thresholds live in `core/sectors.py` and are ordinary Python dictionaries —
 adding a sector or tuning a band is a few lines, no code changes elsewhere.
 
+## Design notes
+
+The chart layer follows a few rules that are worth knowing, because they are the
+difference between "looks like a dashboard" and "can be trusted":
+
+- **No dual-axis charts.** Revenue-vs-margin and leverage-vs-cover used to be
+  single charts with a second y-scale. Two scales let you imply any relationship
+  you like by choosing the ranges, so both are now stacked small multiples on a
+  shared x-axis — same story, no manufactured crossover.
+- **Colour is assigned by the job it does.** Identity gets the fixed categorical
+  order (never cycled, never reassigned by rank); the common-size stack gets one
+  hue dark-to-light because it is magnitude; growth and correlation grids get a
+  diverging pair with a **gray** midpoint because they have polarity. Status
+  colours (good/warning/critical) are reserved and never double as a series.
+- **The palette was validated, not eyeballed.** The five categorical slots were
+  checked against the dark surface for lightness band, chroma floor,
+  colourblind separation and 3:1 contrast. All five pass on the adjacent
+  pairlist that bars, stacks and lines use; forms that compare every pair at
+  once are capped at three slots and always direct-labelled.
+- **Identity never rests on colour alone** — every multi-series chart carries a
+  legend, key points are direct-labelled, and the tables carry the same numbers.
+- **Motion respects `prefers-reduced-motion`.** The entrance animations, the
+  score ring sweep and the meter fills all collapse to nothing for anyone who
+  has asked their OS for less movement.
+
 ## Project layout
 
 ```
@@ -150,6 +175,7 @@ they never contaminate a time series.
 - [ ] Auto-detect the sector from the revenue mix instead of asking
 - [ ] Export the analyst note as a formatted PDF tearsheet
 - [ ] Altman Z-score and Piotroski F-score alongside the composite
+- [ ] A light theme (the dark palette would need re-validating against a light surface, not just flipped)
 
 ---
 

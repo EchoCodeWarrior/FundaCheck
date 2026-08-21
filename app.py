@@ -73,9 +73,12 @@ def kpi_tile(label: str, value: str, delta: str = "", direction: str = "",
     # Sheets do not always run to the same last period (the ratio sheet may stop
     # at FY26 while the P&L carries a TTM column), so every tile states its own.
     period_html = f'<span class="period">{period}</span>' if period else ""
+    # Word values ("Profitability") need a smaller size than figures, or they
+    # break mid-word inside a narrow tile.
+    size_class = " value-text" if not any(ch.isdigit() for ch in value) else ""
     st.markdown(
         f'<div class="kpi"><div class="label">{label}{period_html}</div>'
-        f'<div class="value">{value}</div>{delta_html}{spark}</div>',
+        f'<div class="value{size_class}">{value}</div>{delta_html}{spark}</div>',
         unsafe_allow_html=True,
     )
 
@@ -99,40 +102,63 @@ def chart(fig, key: str) -> None:
 # --------------------------------------------------------------------------
 # sidebar: data in, sector, LLM
 # --------------------------------------------------------------------------
-def sidebar() -> tuple[object, str, LLMConfig]:
+def step(number: int, label: str) -> None:
+    st.markdown(
+        f'<div class="step"><span class="n">{number}</span>{label}'
+        f'<span class="rule"></span></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def sidebar() -> tuple[object, str, LLMConfig, str]:
     with st.sidebar:
         st.markdown(
-            '<div class="card-title">◈ FinTerminal</div>'
-            '<p class="caption-mono">Fundamental analysis workstation</p>',
+            '<div class="side-brand"><div class="side-mark">F</div>'
+            '<div><div class="name">FinTerminal</div>'
+            '<div class="tag">FUNDAMENTAL ANALYSIS</div></div></div>',
             unsafe_allow_html=True,
         )
-        st.markdown("---")
 
-        st.markdown('<div class="card-title">1 · Data source</div>', unsafe_allow_html=True)
+        step(1, "Your data")
         upload = st.file_uploader(
             "3-statement model (.xlsx)", type=["xlsx", "xlsm"],
             label_visibility="collapsed",
+            help="Any Screener.in-style workbook with a HistoricalFS sheet.",
         )
         use_sample = st.toggle(
-            "Use bundled sample", value=upload is None, disabled=not SAMPLE.exists(),
-            help="A real Screener-style 3-statement model, for demo purposes.",
+            "Load the demo model instead", value=upload is None,
+            disabled=not SAMPLE.exists() or upload is not None,
+            help="A real 3-statement model, so you can try the terminal before uploading.",
         )
-        source = upload if upload is not None else (SAMPLE if use_sample else None)
 
-        st.markdown("---")
-        st.markdown('<div class="card-title">2 · Sector lens</div>', unsafe_allow_html=True)
+        if upload is not None:
+            source, source_label = upload, upload.name
+            size_kb = len(upload.getvalue()) / 1024
+            detail = f"{size_kb:,.0f} KB · your upload"
+        elif use_sample:
+            source, source_label = SAMPLE, "3S_model_sample.xlsx"
+            detail = "bundled demo · Adani Enterprises"
+        else:
+            source, source_label, detail = None, "", ""
+
+        if source is not None:
+            st.markdown(
+                f'<div class="loaded-chip"><span class="dot"></span>'
+                f'<span class="txt"><b>{source_label}</b><span>{detail}</span></span></div>',
+                unsafe_allow_html=True,
+            )
+
+        step(2, "Sector lens")
         choices = sector_choices()
+        keys = [k for k, _ in choices]
         sector_key = st.selectbox(
-            "Sector", options=[k for k, _ in choices],
-            format_func=lambda k: dict(choices)[k],
-            index=[k for k, _ in choices].index("infrastructure"),
-            label_visibility="collapsed",
+            "Sector", options=keys, format_func=lambda k: dict(choices)[k],
+            index=keys.index("infrastructure"), label_visibility="collapsed",
             help="Benchmarks and pillar weights change with the sector you pick.",
         )
         st.caption(get_sector(sector_key).notes)
 
-        st.markdown("---")
-        st.markdown('<div class="card-title">3 · AI analyst</div>', unsafe_allow_html=True)
+        step(3, "AI analyst")
         provider = st.selectbox(
             "Provider", options=["groq", "openrouter", "offline"],
             format_func=lambda p: PROVIDERS[p]["label"] if p in PROVIDERS else "Offline (no key)",
@@ -152,17 +178,17 @@ def sidebar() -> tuple[object, str, LLMConfig]:
             if not key:
                 st.caption(f"Free key: {spec['signup']}")
 
-        badge = (
+        st.markdown(
             '<span class="pill live">● LLM connected</span>' if config.is_live
-            else '<span class="pill offline">● Rule-based mode</span>'
+            else '<span class="pill offline">● Rule-based mode</span>',
+            unsafe_allow_html=True,
         )
-        st.markdown(badge, unsafe_allow_html=True)
         st.markdown("---")
         st.caption(
             "The score is always computed by the deterministic engine. "
             "The LLM only writes the commentary, so numbers stay auditable."
         )
-    return source, sector_key, config
+    return source, sector_key, config, source_label
 
 
 # --------------------------------------------------------------------------
@@ -229,7 +255,7 @@ def verdict_panel(result, note: dict) -> None:
     with left:
         st.markdown(
             f"""
-            <div class="verdict">
+            <div class="verdict" style="--accent:{result.colour}">
               <span class="tag" style="color:{result.colour};
                     border:1px solid {result.colour}55; background:{result.colour}18;">
                 {result.verdict}
@@ -241,6 +267,21 @@ def verdict_panel(result, note: dict) -> None:
             unsafe_allow_html=True,
         )
         st.write("")
+        quality = (
+            f"{result.earnings_quality:.2f}x" if result.earnings_quality is not None else "n/a"
+        )
+        covered = len(result.metrics)
+        strip = st.columns(3)
+        with strip[0]:
+            kpi_tile("Earnings quality", quality, "3Y avg CFO / PAT")
+        with strip[1]:
+            kpi_tile("Ratios scored", f"{covered}", f"{len(result.data_gaps)} not found")
+        with strip[2]:
+            best = max(result.pillar_scores, key=result.pillar_scores.get)
+            kpi_tile("Strongest pillar", best.title(),
+                     f"{result.pillar_scores[best]:.0f}/100")
+        st.write("")
+
         if note.get("sector_context"):
             st.markdown(
                 f'<div class="note-block"><div class="card-title">Sector context · '
@@ -250,10 +291,13 @@ def verdict_panel(result, note: dict) -> None:
             )
     with right:
         with card("Composite score"):
-            chart(C.gauge(result), key="gauge")
             st.markdown(
-                f'<p class="caption-mono" style="text-align:center">'
-                f'WEAK &lt;40 &nbsp;·&nbsp; NEUTRAL 40–66 &nbsp;·&nbsp; STRONG 66+</p>',
+                C.score_ring(result.total_score, result.verdict, result.colour),
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<div class="card-title" style="margin-top:.9rem">Pillar scores</div>'
+                + C.pillar_meters(result.pillar_scores),
                 unsafe_allow_html=True,
             )
 
@@ -281,7 +325,7 @@ def overview_tab(model, result) -> None:
     left, right = st.columns([1, 1])
     with left:
         with card("Revenue, profit & margin"):
-            chart(C.revenue_profit_combo(model), key="rev")
+            chart(C.revenue_profit_panel(model), key="rev")
     with right:
         with card("Five-pillar profile"):
             chart(C.pillar_radar(result), key="radar")
@@ -295,6 +339,14 @@ def overview_tab(model, result) -> None:
         with card("Cash flow by activity"):
             chart(C.cashflow_bridge(model), key="cf")
 
+    st.write("")
+    with card("Growth history — every measure, every year"):
+        st.caption(
+            "Blue is growth, red is contraction, gray sits at zero. Reading across "
+            "a row shows whether a good year was the trend or the exception."
+        )
+        chart(C.growth_heatmap(model), key="heat")
+
 
 def ratios_tab(model, result) -> None:
     with card("Ratio scorecard — scored against sector bands"):
@@ -304,7 +356,7 @@ def ratios_tab(model, result) -> None:
     left, right = st.columns([1, 1])
     with left:
         with card("Leverage & solvency"):
-            chart(C.leverage_chart(model), key="lev")
+            chart(C.leverage_panel(model), key="lev")
     with right:
         with card("Working capital cycle"):
             chart(C.working_capital_cycle(model), key="wc")
@@ -434,7 +486,7 @@ def _load(file_bytes: bytes | None, path: str | None):
 
 def main() -> None:
     inject_css()
-    source, sector_key, config = sidebar()
+    source, sector_key, config, source_label = sidebar()
 
     if source is None:
         st.markdown(
@@ -442,11 +494,15 @@ def main() -> None:
             '<div class="sub">UPLOAD A 3-STATEMENT MODEL TO BEGIN</div></div></div>',
             unsafe_allow_html=True,
         )
-        st.info(
-            "Upload an .xlsx 3-statement model in the sidebar, or switch on the "
-            "bundled sample. The workbook needs a `HistoricalFS` sheet and, ideally, "
-            "a `Ratio Analysis` sheet — the layout produced by standard Screener.in "
-            "style templates."
+        st.markdown(
+            '<div class="empty-hero"><div class="glyph">◈</div>'
+            "<h3>Drop a 3-statement model into the sidebar</h3>"
+            "<p>Any Screener.in-style workbook works — it needs a <b>HistoricalFS</b> "
+            "sheet and, ideally, a <b>Ratio Analysis</b> sheet. Nothing is uploaded "
+            "anywhere: the file is parsed in memory for this session only.</p>"
+            '<div class="empty-steps"><div>1 · Upload the .xlsx</div>'
+            "<div>2 · Pick the sector</div><div>3 · Read the verdict</div></div></div>",
+            unsafe_allow_html=True,
         )
         return
 

@@ -13,26 +13,51 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from .scoring import Assessment
 from .sectors import PERCENT_METRICS
 
 # --- design tokens --------------------------------------------------------
-INK = "#e8f2ec"          # primary text on the dark terminal background
-MUTED = "#7d9c8c"        # axis labels, secondary text
-GRID = "rgba(125,156,140,0.14)"
+# The categorical slots below were chosen with the palette validator against
+# this dark surface, not by eye. On the adjacent pairlist (bars, stacks, lines)
+# all five clear the lightness band, chroma floor, CVD separation and 3:1
+# contrast gates. Scatter/heat forms, which compare every pair rather than
+# neighbours, are capped at the first three slots and always direct-labelled.
+INK = "#eaf3ee"          # primary text on the dark terminal background
+MUTED = "#88a598"        # axis labels, secondary text
+GRID = "rgba(136,165,152,0.13)"
 SURFACE = "rgba(0,0,0,0)"
+SURFACE_HEX = "#0b1712"
 
-GREEN = "#37d67a"
-GREEN_DEEP = "#0f7a45"
-GREEN_SOFT = "rgba(55,214,122,0.16)"
-AMBER = "#f0b429"
-RED = "#ff5f56"
-VIOLET = "#8b7cf6"
+# categorical slots, in fixed order — never cycled, never reassigned by rank
+S1 = "#1faa5e"           # brand green
+S2 = "#9085e9"           # violet
+S3 = "#c98500"           # amber
+S4 = "#3d9fd0"           # blue
+S5 = "#d55181"           # magenta
+SERIES = [S1, S2, S3, S4, S5]
 
-SERIES = [GREEN, VIOLET, AMBER, "#4cc9f0", "#f77f9e", GREEN_DEEP]
+# status palette — reserved, never reused as a series colour
+GOOD = "#0ca30c"
+WARNING = "#fab219"
+SERIOUS = "#ec835a"
+CRITICAL = "#d03b3b"
+
+# sequential ramp (magnitude) and diverging pair (polarity, gray midpoint)
+SEQ = ["#0d2a1c", "#12492e", "#166b41", "#1a8c53", "#1faa5e", "#4cc287", "#8ad9b0"]
+DIVERGING = [[0.0, "#d03b3b"], [0.5, "#2c3330"], [1.0, "#3d9fd0"]]
+
+# UI accents (chrome, not data)
+GREEN = S1
+GREEN_BRIGHT = "#37d67a"  # glow / chrome only, never a mark fill
+GREEN_SOFT = "rgba(31,170,94,0.18)"
+AMBER = WARNING
+RED = CRITICAL
+VIOLET = S2
 
 FONT = dict(family="Inter, 'Segoe UI', system-ui, sans-serif", size=13, color=INK)
+GREEN_DEEP = "#12492e"
 
 
 def _shell(fig: go.Figure, height: int = 320, legend: bool = False) -> go.Figure:
@@ -171,51 +196,73 @@ def trend_line(series: pd.Series, metric: str, benchmark: tuple[float, float] | 
     return _shell(fig, height=300)
 
 
-def revenue_profit_combo(model) -> go.Figure:
-    """Sales bars against margin lines — the classic first-look chart."""
-    sales = model.series("Sales")
-    profit = model.series("Net Profit")
-    margin = model.series("Net Margins")
-    if margin.empty:
-        margin = model.series("Net Profit Margin")
+def revenue_profit_panel(model) -> go.Figure:
+    """
+    Sales, net profit and net margin as stacked small multiples on a shared
+    x-axis.
 
-    fig = go.Figure()
+    This used to be one chart with revenue on the left axis and margin on the
+    right. A second y-scale lets you imply any relationship you like by
+    choosing the ranges, so the panel is split instead: same story, no
+    manufactured crossover.
+    """
+    sales = model.series("Sales").dropna()
+    profit = model.series("Net Profit").dropna()
+    margin = model.series("Net Margins").dropna()
+    if margin.empty:
+        margin = model.series("Net Profit Margin").dropna()
+
+    fig = make_subplots(
+        rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.09,
+        subplot_titles=("Sales", "Net profit", "Net margin"),
+    )
     if not sales.empty:
         fig.add_trace(go.Bar(
             x=list(sales.index), y=sales.values, name="Sales",
-            marker=dict(color="rgba(55,214,122,0.32)", line=dict(width=0)),
-            hovertemplate="Sales %{y:,.0f}<extra></extra>",
-        ))
+            marker=dict(color=S1, line=dict(color=SURFACE_HEX, width=2)),
+            hovertemplate="%{x} · sales %{y:,.0f}<extra></extra>",
+        ), row=1, col=1)
     if not profit.empty:
         fig.add_trace(go.Bar(
             x=list(profit.index), y=profit.values, name="Net profit",
-            marker=dict(color=GREEN_DEEP, line=dict(width=0)),
-            hovertemplate="Net profit %{y:,.0f}<extra></extra>",
-        ))
+            marker=dict(color=S2, line=dict(color=SURFACE_HEX, width=2)),
+            hovertemplate="%{x} · net profit %{y:,.0f}<extra></extra>",
+        ), row=2, col=1)
     if not margin.empty:
         fig.add_trace(go.Scatter(
-            x=list(margin.index), y=margin.values * 100, name="Net margin %",
-            yaxis="y2", mode="lines+markers",
-            line=dict(color=VIOLET, width=2.4), marker=dict(size=7, color=VIOLET),
-            hovertemplate="Net margin %{y:.1f}%<extra></extra>",
-        ))
-    fig.update_layout(
-        barmode="group", bargap=0.35,
-        yaxis2=dict(overlaying="y", side="right", showgrid=False,
-                    tickfont=dict(color=VIOLET, size=11), ticksuffix="%"),
-    )
-    return _shell(fig, height=340, legend=True)
+            x=list(margin.index), y=margin.values * 100, name="Net margin",
+            mode="lines+markers", line=dict(color=S3, width=2),
+            marker=dict(size=8, color=S3, line=dict(color=SURFACE_HEX, width=2)),
+            hovertemplate="%{x} · net margin %{y:.1f}%<extra></extra>",
+        ), row=3, col=1)
+        # direct-label the endpoint only, never every point
+        fig.add_annotation(
+            x=list(margin.index)[-1], y=float(margin.iloc[-1]) * 100,
+            text=f"  {float(margin.iloc[-1]) * 100:.1f}%", showarrow=False,
+            xanchor="left", font=dict(color=S3, size=11), row=3, col=1,
+        )
+
+    fig.update_yaxes(ticksuffix="%", row=3, col=1)
+    fig = _shell(fig, height=430)
+    for annotation in fig.layout.annotations[:3]:
+        annotation.font = dict(size=11, color=MUTED)
+        annotation.x = 0
+        annotation.xanchor = "left"
+    fig.update_layout(bargap=0.45)
+    return fig
 
 
 def margin_stack(model) -> go.Figure:
     """Where every rupee of revenue goes — the common-size income statement."""
+    # A stacked common-size chart is ordinal magnitude, not identity: one hue,
+    # dark (cost) to light (what survives as profit).
     rows = [
-        ("COGS", "#123a28"),
-        ("Selling & General Expenses", "#1d5c3d"),
-        ("Depreciation", "#2b7f55"),
-        ("Interest", AMBER),
-        ("Tax", "#8b6b1f"),
-        ("Net Profit", GREEN),
+        ("COGS", SEQ[1]),
+        ("Selling & General Expenses", SEQ[2]),
+        ("Depreciation", SEQ[3]),
+        ("Interest", S3),
+        ("Tax", SEQ[4]),
+        ("Net Profit", SEQ[6]),
     ]
     fig = go.Figure()
     plotted = False
@@ -229,7 +276,7 @@ def margin_stack(model) -> go.Figure:
         plotted = True
         fig.add_trace(go.Bar(
             x=list(series.index), y=series.values * 100, name=label,
-            marker=dict(color=colour, line=dict(width=0)),
+            marker=dict(color=colour, line=dict(color=SURFACE_HEX, width=2)),
             hovertemplate=f"{label}: %{{y:.1f}}%<extra></extra>",
         ))
     if not plotted:
@@ -241,7 +288,7 @@ def margin_stack(model) -> go.Figure:
 
 def working_capital_cycle(model) -> go.Figure:
     """Debtor + inventory days minus payable days, stacked."""
-    parts = [("Debtor Days", GREEN), ("Inventory Days", VIOLET), ("Payable Days", AMBER)]
+    parts = [("Debtor Days", S1), ("Inventory Days", S2), ("Payable Days", S3)]
     fig = go.Figure()
     plotted = False
     for label, colour in parts:
@@ -271,39 +318,56 @@ def working_capital_cycle(model) -> go.Figure:
     return _shell(fig, height=330, legend=True)
 
 
-def leverage_chart(model) -> go.Figure:
-    """Debt/equity bars against interest cover — the solvency picture."""
+def leverage_panel(model) -> go.Figure:
+    """
+    Debt/equity and interest cover, stacked rather than overlaid.
+
+    Both are leverage measures on wildly different scales, which is exactly the
+    case a second y-axis flatters and a small multiple tells honestly.
+    """
     de = model.series("Debt to Equity Ratio").dropna()
     cover = model.series("Interest Coverage Ratio").dropna()
-    fig = go.Figure()
+
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.13,
+        subplot_titles=("Debt / equity", "Interest cover"),
+    )
     if not de.empty:
         fig.add_trace(go.Bar(
             x=list(de.index), y=de.values, name="Debt / equity",
-            marker=dict(color="rgba(139,124,246,0.55)", line=dict(width=0)),
-            hovertemplate="D/E %{y:.2f}x<extra></extra>",
-        ))
+            marker=dict(color=S2, line=dict(color=SURFACE_HEX, width=2)),
+            hovertemplate="%{x} · D/E %{y:.2f}x<extra></extra>",
+        ), row=1, col=1)
     if not cover.empty:
         fig.add_trace(go.Scatter(
-            x=list(cover.index), y=cover.values, name="Interest cover", yaxis="y2",
-            mode="lines+markers", line=dict(color=GREEN, width=2.4),
-            marker=dict(size=7, color=GREEN),
-            hovertemplate="Interest cover %{y:.2f}x<extra></extra>",
-        ))
-    fig.update_layout(
-        bargap=0.4,
-        yaxis2=dict(overlaying="y", side="right", showgrid=False,
-                    tickfont=dict(color=GREEN, size=11), ticksuffix="x"),
-    )
+            x=list(cover.index), y=cover.values, name="Interest cover",
+            mode="lines+markers", line=dict(color=S1, width=2),
+            marker=dict(size=8, color=S1, line=dict(color=SURFACE_HEX, width=2)),
+            hovertemplate="%{x} · interest cover %{y:.2f}x<extra></extra>",
+        ), row=2, col=1)
+        # 1x is the line below which operating profit no longer covers interest
+        fig.add_hline(y=1.0, line=dict(color=CRITICAL, width=1),
+                      row=2, col=1)
+        fig.add_annotation(x=0, xref="x domain", y=1.0, text="1x — profit covers interest",
+                           showarrow=False, xanchor="left", yanchor="bottom",
+                           font=dict(color=CRITICAL, size=10), row=2, col=1)
+
     fig.update_yaxes(ticksuffix="x")
-    return _shell(fig, height=330, legend=True)
+    fig = _shell(fig, height=400)
+    for annotation in fig.layout.annotations[:2]:
+        annotation.font = dict(size=11, color=MUTED)
+        annotation.x = 0
+        annotation.xanchor = "left"
+    fig.update_layout(bargap=0.45)
+    return fig
 
 
 def cashflow_bridge(model) -> go.Figure:
     """Operating, investing and financing cash flows side by side."""
     labels = [
-        ("Cash from Operating Activity", GREEN),
-        ("Cash from Investing Activity", VIOLET),
-        ("Cash from Financing Activity", AMBER),
+        ("Cash from Operating Activity", S1),
+        ("Cash from Investing Activity", S2),
+        ("Cash from Financing Activity", S3),
     ]
     fig = go.Figure()
     plotted = False
@@ -376,7 +440,7 @@ def correlation_heatmap(model, metrics: list[str]) -> go.Figure:
     corr = frame.corr()
     fig = go.Figure(go.Heatmap(
         z=corr.values, x=list(corr.columns), y=list(corr.index),
-        colorscale=[[0, RED], [0.5, "#0d1f17"], [1, GREEN]],
+        colorscale=DIVERGING,
         zmin=-1, zmax=1, showscale=False,
         hovertemplate="%{y} vs %{x}: %{z:.2f}<extra></extra>",
     ))
@@ -426,3 +490,115 @@ def sparkline_svg(series: pd.Series, positive_is_good: bool = True,
 def _clean_numeric(series: pd.Series) -> np.ndarray:
     s = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
     return s.to_numpy(dtype=float)
+
+
+def growth_heatmap(model, metrics: list[str] | None = None) -> go.Figure:
+    """
+    A growth-rate grid: one row per growth measure, one column per year.
+
+    Growth has polarity — it sits above or below zero — so this uses the
+    diverging pair with a neutral gray midpoint. Margins are deliberately NOT
+    on this grid: they are magnitude, not polarity, and putting both jobs on
+    one diverging scale washes the margins out to gray.
+    """
+    metrics = metrics or [
+        "Sales Growth", "EBITDA Growth", "EBIT Growth",
+        "Net Profit Growth", "EPS Growth",
+    ]
+    rows, labels = [], []
+    for metric in metrics:
+        series = _finite(model.series(metric))
+        if series.empty:
+            continue
+        rows.append(series)
+        labels.append(metric)
+    if not rows:
+        return _shell(go.Figure(), height=280)
+
+    frame = pd.DataFrame(rows, index=labels) * 100
+    # Series start in different years, so pandas unions the indexes in order of
+    # appearance. Re-impose the workbook's own chronology.
+    ordered = [year for year in model.years if year in frame.columns]
+    frame = frame[ordered or sorted(frame.columns)]
+
+    # Clip the scale at the 90th percentile so one outlier year does not flatten
+    # every other cell to the midpoint.
+    limit = float(np.nanpercentile(np.abs(frame.to_numpy()), 90)) or 1.0
+
+    fig = go.Figure(go.Heatmap(
+        z=frame.values, x=list(frame.columns), y=list(frame.index),
+        colorscale=DIVERGING, zmid=0, zmin=-limit, zmax=limit,
+        xgap=2, ygap=2, showscale=False,
+        hovertemplate="%{y} · %{x}: %{z:.1f}%<extra></extra>",
+    ))
+    fig.update_xaxes(side="bottom", type="category")
+    return _shell(fig, height=max(250, 44 * len(labels)))
+
+
+def pillar_meters(pillar_scores: dict[str, float]) -> str:
+    """
+    The five pillar scores as an HTML meter stack.
+
+    Drawn by hand rather than with Plotly so the bars can animate in on load —
+    the numbers are the same ones the radar plots.
+    """
+    if not pillar_scores:
+        return ""
+    rows = []
+    for index, (pillar, score) in enumerate(pillar_scores.items()):
+        colour = GOOD if score >= 70 else WARNING if score >= 45 else CRITICAL
+        rows.append(
+            f'<div class="meter-row">'
+            f'<span class="meter-label">{pillar.title()}</span>'
+            f'<span class="meter-track">'
+            f'<span class="meter-fill" style="--target:{score:.0f}%;'
+            f'background:{colour};animation-delay:{index * 90}ms"></span></span>'
+            f'<span class="meter-value">{score:.0f}</span>'
+            f"</div>"
+        )
+    return f'<div class="meter-stack">{"".join(rows)}</div>'
+
+
+def score_ring(score: float, verdict: str, colour: str) -> str:
+    """
+    The composite score as an animated SVG ring.
+
+    Replaces the Plotly gauge: it draws instantly, animates its sweep on load,
+    and states the verdict in text rather than leaving colour to carry it.
+    """
+    radius, stroke = 78.0, 13.0
+    circumference = 2 * np.pi * radius
+    filled = circumference * min(max(score, 0.0), 100.0) / 100.0
+
+    return f'''
+    <div class="score-ring">
+      <svg viewBox="0 0 200 200" role="img"
+           aria-label="Composite score {score:.0f} out of 100 — {verdict}">
+        <circle cx="100" cy="100" r="{radius}" fill="none"
+                stroke="rgba(136,165,152,0.14)" stroke-width="{stroke}"/>
+        <circle cx="100" cy="100" r="{radius}" fill="none" stroke="{colour}"
+                stroke-width="{stroke}" stroke-linecap="round"
+                transform="rotate(-90 100 100)"
+                stroke-dasharray="{filled:.1f} {circumference:.1f}"
+                style="--sweep:{filled:.1f};--track:{circumference:.1f}"
+                class="ring-progress"/>
+        <text x="100" y="96" text-anchor="middle" class="ring-score"
+              fill="{INK}">{score:.0f}</text>
+        <text x="100" y="120" text-anchor="middle" class="ring-unit"
+              fill="{MUTED}">/ 100</text>
+      </svg>
+      <div class="ring-caption">
+        <span class="ring-band"><i style="background:{CRITICAL}"></i>weak &lt;40</span>
+        <span class="ring-band"><i style="background:{WARNING}"></i>neutral 40–66</span>
+        <span class="ring-band"><i style="background:{GOOD}"></i>strong 66+</span>
+      </div>
+    </div>'''
+
+
+def _finite(series: pd.Series) -> pd.Series:
+    """Drop NaNs and the infinities that come from divide-by-near-zero."""
+    return (
+        pd.to_numeric(series, errors="coerce")
+        .replace([np.inf, -np.inf], np.nan)
+        .dropna()
+    )
