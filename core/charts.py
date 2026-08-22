@@ -32,12 +32,15 @@ PALETTES = {
         seq=["#0d2a1c", "#12492e", "#166b41", "#1a8c53", "#1faa5e", "#4cc287", "#8ad9b0"],
         diverging=[[0.0, "#d03b3b"], [0.5, "#2c3330"], [1.0, "#3d9fd0"]],
     ),
+    # Light is the primary theme: it matches the FundaCheck design system, whose
+    # brand green is slot 1. Validated as a set against that design's surface.
     "light": dict(
-        ink="#0e1a14", muted="#5b7a6b", grid="rgba(91,122,107,0.18)",
-        surface="#f4f6f5",
-        series=["#12855a", "#4a3aa7", "#b57500", "#2a78d6", "#c43e6d"],
-        seq=["#d7ece1", "#aedcc6", "#7fc9a6", "#4fb185", "#2b9a6b", "#12855a", "#0a6644"],
-        diverging=[[0.0, "#c0392f"], [0.5, "#e6e9e7"], [1.0, "#2a78d6"]],
+        ink="#15201a", muted="#7d847f", grid="rgba(125,132,127,0.16)",
+        surface="#ffffff",
+        series=["#177245", "#4a3aa7", "#b57500", "#2a78d6", "#c43e6d"],
+        # the design's own green ramp, light to dark
+        seq=["#eef4f0", "#cde5d8", "#a9d3bd", "#6dbd93", "#2b8b57", "#177245", "#0f5b34"],
+        diverging=[[0.0, "#a4483f"], [0.5, "#eceeec"], [1.0, "#2a78d6"]],
     ),
 }
 

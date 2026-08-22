@@ -1,9 +1,13 @@
+# Base theme matches the FundaCheck design system (light is the primary theme).
+# Streamlit bakes these into widget internals, so they must agree with the
+# stylesheet or controls come out the wrong colour; the dark-mode overrides live
+# in assets/style.css.
 [theme]
-base = "dark"
-primaryColor = "#37d67a"
-backgroundColor = "#060d0a"
-secondaryBackgroundColor = "#0b1712"
-textColor = "#e8f2ec"
+base = "light"
+primaryColor = "#177245"
+backgroundColor = "#ececeb"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#15201a"
 font = "sans serif"
 
 [server]

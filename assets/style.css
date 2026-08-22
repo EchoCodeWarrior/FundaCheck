@@ -548,3 +548,20 @@ div[data-testid="stVerticalBlock"]:hover > div .js-plotly-plot { filter: saturat
 /* masthead reads as a page header now, not a system banner */
 .masthead { border-radius: var(--radius); box-shadow: var(--shadow); }
 .masthead .sub { letter-spacing: .09em; }
+
+/* ---------- dark-mode widget internals ----------
+   The Streamlit base theme is light (see .streamlit/config.toml), so dark mode
+   has to restate the control surfaces it bakes in. */
+:root { color-scheme: dark; }
+div[data-baseweb="select"], div[data-baseweb="select"] > div,
+div[data-baseweb="select"] div, div[data-baseweb="select"] div[role="button"],
+div[data-baseweb="popover"] ul, div[data-baseweb="popover"] li,
+.stTextInput input, .stTextArea textarea {
+  background: var(--surface-2) !important;
+  color: var(--ink) !important;
+  border-color: var(--line) !important;
+}
+div[data-baseweb="select"] svg { fill: var(--muted) !important; }
+div[data-baseweb="popover"] li:hover { background: var(--green-dim) !important; }
+[data-testid="stWidgetLabel"] p, [data-testid="stCaptionContainer"] p { color: var(--muted) !important; }
+[data-testid="stFileUploaderDropzone"] * { color: var(--ink) !important; }

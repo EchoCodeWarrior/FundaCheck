@@ -19,6 +19,7 @@ import pandas as pd
 import streamlit as st
 
 from core import charts as C
+from core import design_blocks as D
 from core import ratio_charts as R
 from core.llm import LLMConfig, analyse, answer_question, config_from_env
 from core.derive import fill_missing_ratios
@@ -105,7 +106,8 @@ def fmt(value: float | None, metric: str = "") -> str:
 
 
 def kpi_tile(label: str, value: str, delta: str = "", direction: str = "",
-             spark: str = "", period: str = "", footer: str = "") -> None:
+             spark: str = "", period: str = "", footer: str = "",
+             variant: str = "") -> None:
     delta_html = f'<div class="delta {direction}">{delta}</div>' if delta else ""
     # Sheets do not always run to the same last period (the ratio sheet may stop
     # at FY26 while the P&L carries a TTM column), so every tile states its own.
@@ -114,7 +116,7 @@ def kpi_tile(label: str, value: str, delta: str = "", direction: str = "",
     # break mid-word inside a narrow tile.
     size_class = " value-text" if not any(ch.isdigit() for ch in value) else ""
     st.markdown(
-        f'<div class="kpi"><div class="label">{label}{period_html}</div>'
+        f'<div class="kpi {variant}"><div class="label">{label}{period_html}</div>'
         f'<div class="value{size_class}">{value}</div>{delta_html}{spark}{footer}</div>',
         unsafe_allow_html=True,
     )
@@ -210,7 +212,7 @@ def sidebar() -> tuple[object, str, str]:
                 navigate_to = key
 
         st.markdown('<div class="nav-head">GENERAL</div>', unsafe_allow_html=True)
-        st.session_state.setdefault("dark_mode", True)
+        st.session_state.setdefault("dark_mode", False)
         dark = st.toggle(
             "Dark mode", key="dark_mode",
             help="Both themes use their own validated palette — the light one is "
@@ -281,23 +283,43 @@ def sidebar() -> tuple[object, str, str]:
 # page sections
 # --------------------------------------------------------------------------
 def masthead(model, sector_name: str) -> None:
+    """
+    The page hero: company, sector, last traded price and market cap.
+
+    Laid out per the FundaCheck design — the name at display size, the market
+    data in its own white card to the right.
+    """
     price = model.meta.get("current_price")
     mcap = model.meta.get("market_cap")
-    right = []
+
+    stats = ""
     if price:
-        right.append(f"PRICE {price:,.1f}")
+        whole, _, frac = f"{price:,.2f}".partition(".")
+        stats += (
+            '<div><div class="lbl">LAST TRADED PRICE</div>'
+            f'<div class="val">₹{whole}<small>.{frac}</small></div></div>'
+        )
     if mcap:
-        right.append(f"MCAP {mcap:,.0f} Cr")
-    right.append(f"{len(model.years)} PERIODS")
+        # Indian convention: a lakh crore reads better than eight digits.
+        pretty = f"₹{mcap / 1e5:.2f}L cr" if mcap >= 1e5 else f"₹{mcap:,.0f} cr"
+        if stats:
+            stats += '<div class="hero-rule"></div>'
+        stats += f'<div><div class="lbl">MKT CAP</div><div class="val">{pretty}</div></div>'
+    if stats:
+        stats = f'<div class="hero-stat">{stats}</div>'
 
     st.markdown(
         f"""
         <div class="masthead">
-          <div>
-            <h1><span class="brand-dot"></span>{model.company}</h1>
-            <div class="sub">{sector_name.upper()} &nbsp;·&nbsp; {model.years[0]}–{model.latest_year}</div>
+          <div style="display:flex;align-items:flex-start;gap:20px;flex-wrap:wrap">
+            <div>
+              <h1>{model.company.title()}</h1>
+              <div class="sub">{sector_name.upper()} &nbsp;·&nbsp;
+                   {model.years[0]}–{model.latest_year} &nbsp;·&nbsp;
+                   {len(model.years)} PERIODS</div>
+            </div>
+            <div style="margin-left:auto">{stats}</div>
           </div>
-          <div class="sub" style="text-align:right">{' &nbsp;·&nbsp; '.join(right)}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -312,40 +334,62 @@ def kpi_row(model, result) -> None:
     where the sector defines a band for it — whether the number currently sits
     in the strong, adequate or weak zone for THIS sector.
     """
-    for chunk in (HEADLINE_RATIOS[:5], HEADLINE_RATIOS[5:]):
-        columns = st.columns(len(chunk))
+    # The design leads with the score itself, then the ratios behind it.
+    # Card order follows the design: the score, then the three ratios an analyst
+    # reaches for first, then everything else in fours.
+    by_metric = {metric: (metric, label, higher) for metric, label, higher in HEADLINE_RATIOS}
+    lead_metrics = ["PE Ratio", "Return on Equity (ROE) %", "Debt to Equity Ratio"]
+    rest = [row for row in HEADLINE_RATIOS if row[0] not in lead_metrics]
+
+    lead = st.columns(4)
+    with lead[0]:
+        kpi_tile(
+            "Funda Score", f"{result.total_score:.0f}<small>/100</small>",
+            footer=f'<span class="band">{result.verdict} · sector adjusted</span>',
+            variant="kpi-score",
+        )
+    for column, metric in zip(lead[1:], lead_metrics):
+        if metric in by_metric:
+            _ratio_tile(model, result, column, *by_metric[metric])
+    st.write("")
+
+    for chunk in (rest[:4], rest[4:]):
+        columns = st.columns(4)
         for column, (metric, label, higher_better) in zip(columns, chunk):
-            series = model.series(metric).dropna()
-            with column:
-                if series.empty:
-                    kpi_tile(label, "n/a", "not in this workbook")
-                    continue
-
-                latest = float(series.iloc[-1])
-                delta_text, direction = "", ""
-                if len(series) > 1:
-                    previous = float(series.iloc[-2])
-                    if previous:
-                        change = (latest - previous) / abs(previous) * 100
-                        improving = change >= 0 if higher_better else change < 0
-                        direction = "up" if improving else "down"
-                        delta_text = f"{'▲' if change >= 0 else '▼'} {abs(change):.1f}% YoY"
-
-                scored = result.metric(metric)
-                band_html = ""
-                if scored is not None:
-                    tone = ("good" if scored.score >= 70
-                            else "warn" if scored.score >= 45 else "bad")
-                    band_html = (
-                        f'<span class="band {tone}">{scored.verdict} for sector</span>'
-                    )
-
-                kpi_tile(
-                    label, fmt(latest, metric), delta_text, direction,
-                    spark=C.sparkline_svg(series.tail(9), higher_better),
-                    period=str(series.index[-1]), footer=band_html,
-                )
+            _ratio_tile(model, result, column, metric, label, higher_better)
         st.write("")
+
+
+def _ratio_tile(model, result, column, metric: str, label: str,
+                higher_better: bool) -> None:
+    """One headline-ratio card: value, year-on-year move, and its sector band."""
+    series = model.series(metric).dropna()
+    with column:
+        if series.empty:
+            kpi_tile(label, "n/a", "not in this workbook")
+            return
+
+        latest = float(series.iloc[-1])
+        delta_text, direction = "", ""
+        if len(series) > 1:
+            previous = float(series.iloc[-2])
+            if previous:
+                change = (latest - previous) / abs(previous) * 100
+                improving = change >= 0 if higher_better else change < 0
+                direction = "up" if improving else "down"
+                delta_text = f"{'▲' if change >= 0 else '▼'} {abs(change):.1f}% YoY"
+
+        scored = result.metric(metric)
+        band_html = ""
+        if scored is not None:
+            tone = "good" if scored.score >= 70 else "warn" if scored.score >= 45 else "bad"
+            band_html = f'<span class="band {tone}">{scored.verdict} for sector</span>'
+
+        kpi_tile(
+            label, fmt(latest, metric), delta_text, direction,
+            spark=C.sparkline_svg(series.tail(9), higher_better),
+            period=str(series.index[-1]), footer=band_html,
+        )
 
 
 def verdict_panel(result, note: dict) -> None:
@@ -353,7 +397,7 @@ def verdict_panel(result, note: dict) -> None:
     with left:
         st.markdown(
             f"""
-            <div class="verdict" style="--accent:{result.colour}">
+            <div class="verdict" style="--accent:{result.colour};--amber-rail:{result.colour}">
               <span class="tag" style="color:{result.colour};
                     border:1px solid {result.colour}55; background:{result.colour}18;">
                 {result.verdict}
@@ -427,6 +471,31 @@ def bento(title: str, subtitle: str, key: str, figure, span: str = "") -> None:
         chart(figure, key=key)
 
 
+def design_panels(model, result) -> None:
+    """The Revenue Trend / Valuation / Key Ratios / Health row from the design."""
+    left, middle, right = st.columns([1.25, 1, 1])
+    with left:
+        with card("Revenue Trend"):
+            st.markdown(D.revenue_trend(model), unsafe_allow_html=True)
+    with middle:
+        with card("Valuation"):
+            st.markdown('<p class="tile-sub">Multiples against the company\'s own '
+                        'history</p>', unsafe_allow_html=True)
+            st.markdown(D.valuation_panel(model), unsafe_allow_html=True)
+    with right:
+        with card("Key Ratios"):
+            st.markdown(D.key_ratios(model, result), unsafe_allow_html=True)
+
+    st.write("")
+    left, right = st.columns([1, 1])
+    with left:
+        with card("Financial Health"):
+            st.markdown(D.health_gauge(result), unsafe_allow_html=True)
+    with right:
+        with card("Five-pillar profile"):
+            chart(C.pillar_radar(result), key="radar")
+
+
 def overview_tab(model, result) -> None:
     """
     The ten headline ratios, one chart each, in a bento grid.
@@ -434,6 +503,9 @@ def overview_tab(model, result) -> None:
     Tile sizes are deliberately uneven: the ratios that carry the most weight in
     a fundamental call get the wider tiles, so the layout itself ranks them.
     """
+    design_panels(model, result)
+    st.write("")
+
     # Row 1 — the two return ratios, side by side and directly comparable
     left, right = st.columns([1, 1])
     with left:
@@ -614,7 +686,7 @@ def _load(file_bytes: bytes | None, path: str | None):
 
 
 def main() -> None:
-    mode = "dark" if st.session_state.get("dark_mode", True) else "light"
+    mode = "dark" if st.session_state.get("dark_mode", False) else "light"
     inject_css(mode)
     source, sector_key, source_label = sidebar()
     # Keys live in the deployment's secret store, never in the UI or the repo.
