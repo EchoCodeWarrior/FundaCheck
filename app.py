@@ -197,12 +197,17 @@ def sidebar() -> tuple[object, str, str]:
         # ---- navigation ----
         st.markdown('<div class="nav-head">MENU</div>', unsafe_allow_html=True)
         current = st.session_state.setdefault("page", "overview")
+        # The click is recorded here but acted on at the very end of the
+        # sidebar. Rerunning from inside this loop would abort the script before
+        # the widgets below (the uploader above all) are instantiated, and
+        # Streamlit discards the state of any widget a run did not render — which
+        # is how navigating between pages used to throw the uploaded file away.
+        navigate_to = None
         for key, label in NAV_PAGES:
             active = key == current
             if st.button(label, key=f"nav-{key}", use_container_width=True,
                          type="primary" if active else "secondary"):
-                st.session_state.page = key
-                st.rerun()
+                navigate_to = key
 
         st.markdown('<div class="nav-head">GENERAL</div>', unsafe_allow_html=True)
         st.session_state.setdefault("dark_mode", True)
@@ -218,7 +223,11 @@ def sidebar() -> tuple[object, str, str]:
             label_visibility="collapsed", key="upload",
             help="Any Screener.in-style workbook.",
         )
-        # An upload always wins, and switches the demo off by itself.
+        # The uploader is the single source of truth for "is a file loaded".
+        # That only holds because every st.rerun() in this app now happens after
+        # the sidebar has fully rendered — a rerun fired before this widget is
+        # instantiated would make Streamlit discard its state, which is exactly
+        # how navigating between pages used to lose the file. Keep it that way.
         if upload is not None:
             st.session_state.demo_on = False
 
@@ -229,7 +238,7 @@ def sidebar() -> tuple[object, str, str]:
         )
 
         if upload is not None:
-            source, source_label = upload, upload.name
+            source, source_label = upload.getvalue(), upload.name
         elif use_sample:
             source, source_label = SAMPLE, "Demo model"
         else:
@@ -257,6 +266,12 @@ def sidebar() -> tuple[object, str, str]:
         )
         st.session_state.sector_pref = sector_key
         st.caption(get_sector(sector_key).notes)
+
+    if navigate_to and navigate_to != current:
+        # Safe here: every sidebar widget above has been instantiated, so their
+        # state survives the rerun.
+        st.session_state.page = navigate_to
+        st.rerun()
 
     C.set_theme("dark" if dark else "light")
     return source, sector_key, source_label
@@ -624,8 +639,8 @@ def main() -> None:
         return
 
     try:
-        if hasattr(source, "read"):
-            model = _load(source.getvalue(), None)
+        if isinstance(source, (bytes, bytearray)):
+            model = _load(bytes(source), None)
         else:
             model = _load(None, str(source))
     except ParseError as exc:
