@@ -30,6 +30,19 @@ from .scoring import Assessment
 
 TIMEOUT_SECONDS = 60
 
+# The analyst always runs in reasoning mode. The verdict is a judgement across a
+# dozen interacting ratios where the sector decides what "good" means, so a model
+# that reasons before answering is not a nice-to-have. Any model configured here
+# must be one of these; anything else is replaced with the default rather than
+# silently downgrading the analysis to a non-reasoning model.
+REASONING_MODELS = {
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3-32b",
+    "deepseek-r1-distill-llama-70b",
+}
+DEFAULT_REASONING_MODEL = "openai/gpt-oss-120b"
+
 
 @dataclass
 class LLMConfig:
@@ -47,6 +60,11 @@ class LLMConfig:
     temperature: float = 0.2
     reasoning_effort: str = "high"
 
+    def __post_init__(self) -> None:
+        # Enforce reasoning mode at construction, so no call site can opt out.
+        if self.provider == "groq" and self.model not in REASONING_MODELS:
+            self.model = DEFAULT_REASONING_MODEL
+
     @property
     def api_key(self) -> str:
         return self.api_keys[0] if self.api_keys else ""
@@ -60,6 +78,7 @@ PROVIDERS = {
     "groq": {
         "label": "Groq",
         "url": "https://api.groq.com/openai/v1/chat/completions",
+        # Every entry here must be a reasoning model — see REASONING_MODELS.
         # Reasoning-capable models only: the verdict is a judgement call across
         # a dozen interacting ratios, which is exactly where a model that thinks
         # before answering beats one that does not.
@@ -197,7 +216,7 @@ def _post(config: LLMConfig, messages: list[dict]) -> str:
         "temperature": config.temperature,
         "max_tokens": 2600,
     }
-    if config.reasoning_effort and "gpt-oss" in config.model:
+    if config.model in REASONING_MODELS:
         payload["reasoning_effort"] = config.reasoning_effort
 
     last_error = "no API key configured"
