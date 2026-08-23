@@ -313,3 +313,12 @@ div[data-baseweb="popover"] li:hover { background: var(--green-dim) !important; 
 [data-testid="stMainBlockContainer"] .stButton > button[kind="secondary"]:hover {
   border-color: #cfded5; background: #f7faf8;
 }
+
+/* statements pills */
+.stTabs [data-baseweb="tab"] {
+  border-radius: 11px; margin-right: .35rem;
+  background: #f4f5f3; font-size: 13px; font-weight: 700;
+}
+.stTabs [aria-selected="true"] { background: var(--green); color: #fff; }
+.stTabs [data-baseweb="tab-highlight"] { display: none; }
+.stTabs [data-baseweb="tab-border"] { display: none; }

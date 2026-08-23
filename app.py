@@ -17,10 +17,13 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from core import charts as C
 from core import design_blocks as D
-from core import ratio_charts as R
+from core import report as REP
+from core import sections as S
+from core import viz
 from core.llm import LLMConfig, analyse, answer_question, config_from_env
 from core.derive import fill_missing_ratios
 from core.parser import ParseError, load_model
@@ -61,18 +64,35 @@ st.set_page_config(
 # --------------------------------------------------------------------------
 # small UI helpers
 # --------------------------------------------------------------------------
-def inject_css(mode: str = "dark") -> None:
+def inject_css(mode: str = "dark", minimized: bool = False) -> None:
     """
-    Load the stylesheet, plus the light overrides when day mode is on.
-
-    Streamlit strips <script> from markdown, so the theme cannot be stamped onto
-    the root element and switched with a CSS attribute selector — the light
-    rules are injected as their own sheet instead.
+    Load the stylesheet, plus the light overrides when day mode is on, plus
+    the narrow-sidebar rules when the Minimize toggle is engaged.
     """
     css = (APP_DIR / "assets" / "style.css").read_text()
     if mode == "light":
         css += "\n" + (APP_DIR / "assets" / "light.css").read_text()
+    if minimized:
+        css += "\n" + MIN_CSS
     st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+
+
+MIN_CSS = """
+section[data-testid="stSidebar"]{min-width:92px!important;max-width:92px!important}
+.side-brand .txtwrap{display:none}
+.side-brand .side-mark{margin:0 auto}
+.nav-head,.step,[class*="detected"]{display:none!important}
+section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"],
+section[data-testid="stSidebar"] .stSelectbox,
+section[data-testid="stSidebar"] [data-testid="stWidgetLabel"],
+section[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+section[data-testid="stSidebar"] .stToggle{display:none!important}
+.loaded-chip{justify-content:center;padding:.55rem .3rem!important}
+.loaded-chip .txt{display:none}
+section[data-testid="stSidebar"] .stButton>button{
+  padding-left:.15rem!important;padding-right:.15rem!important;
+  font-size:16px!important;justify-content:center;text-align:center}
+"""
 
 
 @contextmanager
@@ -86,6 +106,18 @@ def card(title: str):
     with st.container(border=True):
         st.markdown(f'<div class="card-title">{title}</div>', unsafe_allow_html=True)
         yield
+
+
+def vcomp(html: str, height: int) -> None:
+    """Render one design-exact HTML/SVG block (iframe => hover tooltips work)."""
+    components.html(viz.doc(html), height=height, scrolling=False)
+
+
+def chart_card(title: str, subtitle: str, html: str, height: int) -> None:
+    with card(title):
+        if subtitle:
+            st.markdown(f'<p class="tile-sub">{subtitle}</p>', unsafe_allow_html=True)
+        vcomp(html, height)
 
 
 def fmt(value: float | None, metric: str = "") -> str:
@@ -165,13 +197,19 @@ def sidebar() -> tuple[object, str, str]:
     with st.sidebar:
         st.markdown(
             '<div class="side-brand"><div class="side-mark">F</div>'
-            '<div><div class="name">FundaCheck</div>'
+            '<div class="txtwrap"><div class="name">FundaCheck</div>'
             '<div class="tag">FUNDAMENTAL TERMINAL</div></div></div>',
             unsafe_allow_html=True,
         )
 
+        # ---- minimize / expand (the design's sidebar toggle) ----
+        collapsed = bool(st.session_state.get("nav_min", False))
+        if st.button("\u00bb" if collapsed else "\u00ab  Minimize",
+                     key="side-min", use_container_width=True):
+            st.session_state.nav_min = not collapsed
+            st.rerun()
+
         # ---- navigation ----
-        st.markdown('<div class="nav-head">MENU</div>', unsafe_allow_html=True)
         current = st.session_state.setdefault("page", "overview")
         # The click is recorded here but acted on at the very end of the
         # sidebar. Rerunning from inside this loop would abort the script before
@@ -180,9 +218,11 @@ def sidebar() -> tuple[object, str, str]:
         # is how navigating between pages used to throw the uploaded file away.
         navigate_to = None
         for key, label in NAV_PAGES:
+            shown = label[0] if collapsed else label
             active = key == current
-            if st.button(label, key=f"nav-{key}", use_container_width=True,
-                         type="primary" if active else "secondary"):
+            if st.button(shown, key=f"nav-{key}", use_container_width=True,
+                         type="primary" if active else "secondary",
+                         help=None if collapsed else label):
                 navigate_to = key
 
         # Day/Night lives in the main-area top bar now (the design puts it there);
@@ -277,23 +317,22 @@ def topbar() -> None:
 
 
 def _export_report(model, result) -> bytes:
-    """Plain-text report for the Export Report button."""
-    lines = [
-        f"FundaCheck report — {model.company.title()}",
-        f"Sector lens : {result.sector.name}",
-        f"Score       : {result.total_score:.0f}/100 ({result.verdict})",
-        "",
-        f"{'METRIC':<38}{'LATEST':>14}{'WEAK AT':>12}{'STRONG AT':>12}{'SCORE':>8}",
-        "-" * 84,
-    ]
-    for m in result.metrics:
-        lines.append(
-            f"{m.metric:<38}{m.display(m.latest):>14}"
-            f"{m.display(m.weak_at):>12}{m.display(m.strong_at):>12}"
-            f"{round(m.score):>8}"
-        )
-    lines += ["", f"Periods covered: {model.years[0]}–{model.latest_year}"]
-    return "\n".join(lines).encode()
+    """The Export Report button: one PDF snapshotting every section."""
+    try:
+        return REP.build_pdf(model, result)
+    except Exception as exc:                        # noqa: BLE001 - never block UI
+        LOGGER.exception("PDF export failed")
+        st.warning(f"PDF export failed, falling back to a plain-text report. ({exc})")
+        lines = [
+            f"FundaCheck report - {model.company.title()}",
+            f"Sector lens : {result.sector.name}",
+            f"Score       : {result.total_score:.0f}/100 ({result.verdict})",
+            "",
+        ]
+        for m in result.metrics:
+            lines.append(f"{S.short_name(m.metric):<28}{m.display(m.latest):>14}"
+                         f"  score {round(m.score)}")
+        return "\n".join(lines).encode()
 
 
 def masthead(model, sector_name: str, result) -> None:
@@ -340,8 +379,9 @@ def masthead(model, sector_name: str, result) -> None:
         with btn_col:
             st.download_button(
                 "Export Report", data=_export_report(model, result),
-                file_name=f"{model.company}_fundacheck_report.txt",
-                mime="text/plain", key="export-report", use_container_width=True,
+                file_name=f"{model.company}_fundacheck_report.pdf",
+                mime="application/pdf", key="export-report",
+                use_container_width=True,
             )
 
 
@@ -595,158 +635,184 @@ def overview_tab(model, result) -> None:
     design_panels(model, result)
 
 
-def ratio_bento(model, result) -> None:
-    """The ten headline ratios, one chart each — the Ratio deep dive grid."""
-    # Row 1 — the two return ratios, side by side and directly comparable
-    left, right = st.columns([1, 1])
-    with left:
-        bento("Return on equity", "How hard shareholder money is working",
-              "roe", R.return_trend(model, result, "Return on Equity (ROE) %"))
-    with right:
-        bento("Return on capital employed", "The same question, but debt counts too",
-              "roce", R.return_trend(model, result, "Return on Capital Employed (ROCE) %"))
-
-    left, right = st.columns([1.35, 1])
-    with left:
-        bento("Sales to profit", "Which rung of the ladder loses the most",
-              "ladder", R.profit_ladder(model))
-    with right:
-        bento("EBITDA margin vs sector", "Bar is today, tick is the 3-year average",
-              "bullet", R.margin_bullet(model, result))
-        bento("Momentum", "Growth above the line, contraction below",
-              "growth", R.growth_columns(model, "Sales Growth"))
-
-    left, right = st.columns([1, 1])
-    with left:
-        bento("Funding mix", "Share of capital that is borrowed, year by year",
-              "mix", R.funding_mix(model))
-    with right:
-        bento("Interest cover", "Distance from the line where profit stops covering interest",
-              "cover", R.interest_cover_zone(model, result))
-
-    left, right = st.columns([1, 1.15])
-    with left:
-        bento("Earnings quality", "The gap between reported profit and actual cash",
-              "cashq", R.cash_quality_dumbbell(model))
-    with right:
-        bento("Cash conversion cycle", "Collected and held, minus what suppliers fund",
-              "ccc", R.cash_cycle_bridge(model))
-
-    bento("Valuation", "Today's P/E against the company's own history",
-          "pe", R.valuation_strip(model))
+def _page_header(title: str, subtitle: str) -> None:
+    st.markdown(
+        f'<div style="display:flex;align-items:baseline;gap:14px;padding:2px 4px 0;'
+        f'flex-wrap:wrap"><span style="font-size:26px;font-weight:800;'
+        f'letter-spacing:-.7px;color:#15201a">{title}</span>'
+        f'<span style="font-size:13.5px;color:#8b918e">{subtitle}</span></div>',
+        unsafe_allow_html=True,
+    )
 
 
 def ratios_tab(model, result) -> None:
-    ratio_bento(model, result)
-    st.write("")
-    with card("Ratio scorecard — scored against sector bands"):
-        chart(C.scorecard_bars(result), key="scorecard")
+    """Ratio deep dive - an exact port of the reference page's section."""
+    years = S.full_years(model)
+    latest_year = years[-1] if years else model.latest_year
 
-    st.write("")
-    left, right = st.columns([1, 1])
-    with left:
-        with card("Leverage & solvency"):
-            chart(C.leverage_panel(model), key="lev")
-    with right:
-        with card("Working capital cycle"):
-            chart(C.working_capital_cycle(model), key="wc")
+    _page_header("Ratio deep dive",
+                 "All nine categories from the Ratio Analysis sheet.")
 
+    # ---- stat cards + ROCE spark | dials + cost donut -----------------------
+    def pct_val(*names):
+        s = S.pct_series(S.ser(model, *names))
+        return float(s.iloc[-1]) if not s.empty else None
+
+    npg = pct_val("Net Profit Growth")
+    rev_g = pct_val("Sales Growth")
+    cogs_v = S.last_two(S.ser(model, "COGS"))
+    rev_v = S.last_two(S.ser(model, "Sales"))
+    np_v = S.last_two(S.ser(model, "Net Profit"))
+    other_v = S.last_two(S.ser(model, "Other Income"))
+    ebit_v = S.last_two(S.ser(model, "EBIT (OPM)", "EBIT (Operating Profit)", "EBITDA"))
+
+    left_col, right_col = st.columns([1.15, 1.6])
+    with left_col:
+        if npg is not None and np_v[0]:
+            arrow = "\u25b2" if npg >= 0 else "\u25bc"
+            prev_lab = f"{years[-2]} cr" if len(years) > 1 else "prev yr"
+            st.markdown(
+                '<div style="display:grid;grid-template-columns:repeat(auto-fit,'
+                'minmax(min(180px,100%),1fr));gap:14px">' +
+                S.stat_card(arrow, "good" if npg >= 30 else "warn",
+                            f"{npg:.1f}%", "Net profit growth",
+                            S.cr(np_v[0]), f"{latest_year} cr",
+                            S.cr(np_v[1]) if np_v[1] else "n/a", prev_lab) +
+                "</div>", unsafe_allow_html=True)
+        st.write("")
+        if rev_g is not None:
+            arrow = "\u25b2" if rev_g >= 0 else "\u25bc"
+            tone = "good" if rev_g >= 10 else ("warn" if rev_g > 0 else "bad")
+            st.markdown(
+                '<div style="display:grid;grid-template-columns:repeat(auto-fit,'
+                'minmax(min(180px,100%),1fr));gap:14px">' +
+                S.stat_card(arrow, tone, f"{rev_g:.1f}%", "Revenue growth",
+                            S.cr(rev_v[0]), f"{latest_year} cr",
+                            S.cr(rev_v[1]) or "n/a", f"{years[-2]} cr") +
+                "</div>", unsafe_allow_html=True)
+        st.write("")
+        st.markdown(f'<div style="width:min(350px,100%)">'
+                    f'{S.roce_card(model, result)}</div>', unsafe_allow_html=True)
+
+    with right_col:
+        if other_v[0] is not None:
+            note = (f"above EBIT of {S.cr(ebit_v[0])}"
+                    if ebit_v[0] and other_v[0] > ebit_v[0]
+                    else "within operating income")
+            st.markdown(
+                '<div style="display:grid;grid-template-columns:repeat(auto-fit,'
+                'minmax(min(180px,100%),1fr));gap:14px">' +
+                S.simple_card(f"Other income, {latest_year}",
+                              S.cr(other_v[0]), note) + "</div>",
+                unsafe_allow_html=True)
+            st.write("")
+        dials_html, dials_h = S.dials_row(model)
+        with card("Overall profit margin"):
+            st.markdown('<p class="tile-sub">Latest year, dial scaled 0-30%</p>',
+                        unsafe_allow_html=True)
+            vcomp(dials_html, dials_h + 40)
+        with card("Where each \u20b9100 of sales goes"):
+            st.markdown('<p class="tile-sub">Latest-year cost structure</p>',
+                        unsafe_allow_html=True)
+            cost_html, cost_h = S.cost_card(model)
+            vcomp(cost_html, cost_h)
+
+    # ---- scorecard strip ------------------------------------------------------
     st.write("")
-    with card("Explore any ratio through time"):
-        available = [m for m in model.ratios.index] or list(model.historical.index)
-        default = "Return on Capital Employed (ROCE) %"
-        metric = st.selectbox(
-            "Ratio", available,
-            index=available.index(default) if default in available else 0,
-            label_visibility="collapsed",
-        )
-        band = result.sector.benchmarks.get(metric)
-        series = model.series(metric).dropna()
-        if series.empty:
-            st.info("No history available for that ratio.")
-        else:
-            chart(C.trend_line(series, metric, band), key="trend")
-            if band:
-                st.markdown(
-                    f'<p class="caption-mono">{result.sector.name} band · '
-                    f'weak {fmt(band[0], metric)} · strong {fmt(band[1], metric)}</p>',
-                    unsafe_allow_html=True,
-                )
+    rows = [(S.short_name(m.metric), m.display(m.latest), float(m.score))
+            for m in result.metrics]
+    sc_html, sc_h = viz.scorecard_chart(rows)
+    with card("Ratio scorecard - scored against sector bands"):
+        vcomp(sc_html, max(200, sc_h))
+
+    # ---- the eight-chart grid -------------------------------------------------
+    charts = S.deepdive_charts(model)
+    st.write("")
+    pairs = [
+        ("Margin ladder", "Gross \u2192 EBITDA \u2192 EBIT \u2192 Net", "margins"),
+        ("Returns", "ROE \u00b7 ROCE \u00b7 ROA", "returns"),
+        ("Leverage & solvency", "Debt/equity bars \u00b7 interest cover line", "leverage"),
+        ("Working capital cycle", "Debtor + inventory \u2212 payable days", "wc"),
+        ("Cash flow mix", "Operating \u00b7 investing \u00b7 financing, \u20b9 cr", "cash"),
+        ("Turnover & efficiency", "Times per year, latest vs 10-yr mean", "turnover"),
+        ("Total assets, by component", "Stacked, \u20b9 crore", "assets"),
+        ("Total liabilities & equity, by component",
+         "Stacked, \u20b9 crore", "liab"),
+    ]
+    for i in range(0, len(pairs), 2):
+        cols = st.columns(2)
+        for col, (title, sub, key) in zip(cols, pairs[i:i + 2]):
+            if key in charts:
+                html, height = charts[key]
+                with col:
+                    chart_card(title, sub, html, max(260, height))
 
 
 def statements_tab(model) -> None:
-    # The top-bar search filters every statement table by row name.
+    """Statements - pill tabs, % change under every value, design table."""
     query = (st.session_state.get("search_q") or "").strip().lower()
-    tabs = st.tabs(["Historical financials", "Ratio analysis", "Common size"])
-    frames = [model.historical, model.ratios, model.common_size]
-    names = ["historical", "ratios", "common_size"]
-    for tab, frame, name in zip(tabs, frames, names):
+    tab_names = ["Income Statement", "Ratio Analysis", "Common Size"]
+    tabs = st.tabs(tab_names)
+    sources = {"Income Statement": "Income Statement",
+               "Ratio Analysis": "Ratio Analysis",
+               "Common Size": "Common Size"}
+    show_pct = st.toggle("Show % change", key="stmt-pct", value=True)
+    for label, tab in zip(tab_names, tabs):
         with tab:
-            if frame.empty:
-                st.info("This sheet was not found in the uploaded workbook.")
-                continue
-            if query:
-                frame = frame[frame.index.astype(str).str.lower().str.contains(query)]
-                if frame.empty:
-                    st.info(f'No rows match "{query}".')
-                    continue
-            styled = frame.style.format("{:,.2f}", na_rep="—")
-            try:
-                # A row-wise gradient makes trends readable at a glance.
-                # It needs matplotlib, so fall back to a plain table without it.
-                styled = styled.background_gradient(cmap="Greens", axis=1)
-            except ImportError:
-                pass
-            st.dataframe(styled, use_container_width=True, height=520)
-            st.download_button(
-                "Download as CSV", frame.to_csv().encode(),
-                file_name=f"{model.company}_{name}.csv", mime="text/csv",
-                key=f"dl-{name}",
-            )
+            html = S.statements_html(model, sources[label], show_pct, query)
+            st.markdown(html, unsafe_allow_html=True)
+    st.markdown(
+        '<div style="display:flex;align-items:center;gap:12px;padding-top:12px">'
+        '<span style="margin-left:auto;font-size:12px;color:#9aa09d">'
+        'Above figures are in \u20b9 crores</span></div>',
+        unsafe_allow_html=True,
+    )
 
 
 def sector_lens_tab(model, result) -> None:
-    st.markdown(
-        '<div class="note-block watch"><div class="card-title">Why this matters</div>'
-        '<p style="margin:.35rem 0 0;font-size:.89rem;line-height:1.55">'
-        'The financials below never change — only the yardstick does. A debt/equity '
-        'of 8x is routine for a bank and a solvency alarm for a software firm, so the '
-        'same company can be strong under one lens and weak under another. This view '
-        'runs every sector rule book over the loaded model at once.</p></div>',
-        unsafe_allow_html=True,
-    )
-    frame = compare_sectors(model, list(SECTORS.values()))
-    with card("Same numbers, every sector rule book"):
-        chart(C.sector_lens_chart(frame), key="lens")
-
+    """Sector lens - exact port of the reference section."""
+    _page_header("Sector lens", "One set of numbers, nine rule books.")
+    st.markdown(S.why_card(), unsafe_allow_html=True)
     st.write("")
-    left, right = st.columns([1.1, 1])
+
+    sectors, hot_name = S.sector_scores(model, result)
+    bars_html, bars_h = viz.sector_bars(sectors, hot_name)
+    with card("Same numbers, every sector rule book"):
+        vcomp(bars_html, max(220, bars_h))
+    st.write("")
+
+    gauge_html, gauge_h = viz.gauge(float(result.total_score),
+                                    f"{result.total_score:.0f}%", compact=False)
+    legend = viz.gauge_legend(compact=True)
+    left, right = st.columns([1.05, 1])
+    with left:
+        with card("Financial health"):
+            st.markdown('<p class="tile-sub">Composite index under this lens</p>',
+                        unsafe_allow_html=True)
+            vcomp(gauge_html, gauge_h + 16)
+    with right:
+        st.markdown('<div class="card-title">&nbsp;</div>'
+                    f'<div style="padding-top:26px">{legend}</div>',
+                    unsafe_allow_html=True)
+    st.write("")
+
+    hm_html, hm_h = S.heatmap_block(model)
+    left, right = st.columns([1, 1])
     with left:
         with card("How the ratios move together"):
-            chart(
-                C.correlation_heatmap(model, [
-                    "Sales Growth", "EBITDA Margin", "Net Profit Margin",
-                    "Return on Equity (ROE) %", "Debt to Equity Ratio",
-                    "Interest Coverage Ratio",
-                ]),
-                key="corr",
-            )
+            st.markdown('<p class="tile-sub">Pairwise correlation across history</p>',
+                        unsafe_allow_html=True)
+            vcomp(hm_html, max(300, hm_h))
     with right:
-        with card(f"Applied benchmarks · {result.sector.name}"):
-            bands = pd.DataFrame([
-                {
-                    "Metric": m.metric,
-                    "Latest": m.display(m.latest),
-                    "Weak at": m.display(m.weak_at),
-                    "Strong at": m.display(m.strong_at),
-                    "Score": round(m.score),
-                }
-                for m in result.metrics
-            ])
-            st.dataframe(bands, use_container_width=True, hide_index=True, height=430)
+        with card("Applied benchmarks"):
+            st.markdown(f'<p class="tile-sub">{result.sector.name}</p>',
+                        unsafe_allow_html=True)
+            st.markdown(S.bench_table(result), unsafe_allow_html=True)
 
 
 def qa_tab(result, config: LLMConfig) -> None:
+    _page_header("Ask the analyst",
+                 "Answers grounded only in the loaded model.")
     with card("Ask the analyst"):
         st.caption(
             "Free-text questions about the loaded company. The model only sees the "
@@ -766,12 +832,12 @@ def qa_tab(result, config: LLMConfig) -> None:
         )
         if st.button("Ask", type="primary") and question.strip():
             with st.spinner("Analysing…"):
-                st.markdown(
-                    f'<div class="note-block"><p style="margin:0;font-size:.92rem;'
-                    f'line-height:1.6">{answer_question(result, question.strip(), config)}</p></div>',
-                    unsafe_allow_html=True,
-                )
+                answer = answer_question(result, question.strip(), config)
+                vcomp(f'<div style="font-size:13.5px;line-height:1.65;'
+                      f'color:#3f4744;padding:4px 2px">{answer}</div>', 180)
 
+
+# SPLICE_END
 
 # --------------------------------------------------------------------------
 # main
@@ -783,7 +849,7 @@ def _load(file_bytes: bytes | None, path: str | None):
 
 def main() -> None:
     mode = "dark" if st.session_state.get("dark_mode", False) else "light"
-    inject_css(mode)
+    inject_css(mode, minimized=bool(st.session_state.get("nav_min", False)))
     source, sector_key, source_label = sidebar()
     # Keys live in the deployment's secret store, never in the UI or the repo.
     config = analyst_config()

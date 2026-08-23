@@ -89,7 +89,7 @@ def set_theme(mode: str = "dark") -> None:
     GREEN_SOFT = _translucent(S1, 0.18)
 
 
-FONT_FAMILY = "Inter, 'Segoe UI', system-ui, sans-serif"
+FONT_FAMILY = "'Plus Jakarta Sans', Inter, 'Segoe UI', system-ui, sans-serif"
 
 
 def _shell(fig: go.Figure, height: int = 320, legend: bool = False) -> go.Figure:

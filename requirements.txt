@@ -4,4 +4,4 @@ numpy>=1.26
 plotly>=5.22
 openpyxl>=3.1
 requests>=2.31
-matplotlib>=3.8      # only used for the heat-shaded statement tables
+fpdf2>=2.7
