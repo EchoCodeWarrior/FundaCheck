@@ -432,16 +432,8 @@ def verdict_panel(result, note: dict) -> None:
                 unsafe_allow_html=True,
             )
     with right:
-        with card("Composite score"):
-            st.markdown(
-                C.score_ring(result.total_score, result.verdict, result.colour),
-                unsafe_allow_html=True,
-            )
-            st.markdown(
-                '<div class="card-title" style="margin-top:.9rem">Pillar scores</div>'
-                + C.pillar_meters(result.pillar_scores),
-                unsafe_allow_html=True,
-            )
+        with card("What moves the score"):
+            st.markdown(D.score_drivers(result), unsafe_allow_html=True)
 
 
 def analyst_note(result, note: dict) -> None:
@@ -495,17 +487,22 @@ def design_panels(model, result) -> None:
         with card("Five-pillar profile"):
             chart(C.pillar_radar(result), key="radar")
 
+    st.write("")
+    sankey_title, sankey_svg = D.income_sankey(model)
+    if sankey_svg:
+        with card(sankey_title):
+            st.markdown('<p class="tile-sub">Income statement flow, ₹ crore</p>',
+                        unsafe_allow_html=True)
+            st.markdown(sankey_svg, unsafe_allow_html=True)
+
 
 def overview_tab(model, result) -> None:
-    """
-    The ten headline ratios, one chart each, in a bento grid.
-
-    Tile sizes are deliberately uneven: the ratios that carry the most weight in
-    a fundamental call get the wider tiles, so the layout itself ranks them.
-    """
+    """The Dashboard page: the design's panels, then the income-statement flow."""
     design_panels(model, result)
-    st.write("")
 
+
+def ratio_bento(model, result) -> None:
+    """The ten headline ratios, one chart each — the Ratio deep dive grid."""
     # Row 1 — the two return ratios, side by side and directly comparable
     left, right = st.columns([1, 1])
     with left:
@@ -515,7 +512,6 @@ def overview_tab(model, result) -> None:
         bento("Return on capital employed", "The same question, but debt counts too",
               "roce", R.return_trend(model, result, "Return on Capital Employed (ROCE) %"))
 
-    # Row 2 — margins: the ladder, then the one number against its target
     left, right = st.columns([1.35, 1])
     with left:
         bento("Sales to profit", "Which rung of the ladder loses the most",
@@ -526,7 +522,6 @@ def overview_tab(model, result) -> None:
         bento("Momentum", "Growth above the line, contraction below",
               "growth", R.growth_columns(model, "Sales Growth"))
 
-    # Row 3 — risk: how it is funded, and whether it can service that funding
     left, right = st.columns([1, 1])
     with left:
         bento("Funding mix", "Share of capital that is borrowed, year by year",
@@ -535,7 +530,6 @@ def overview_tab(model, result) -> None:
         bento("Interest cover", "Distance from the line where profit stops covering interest",
               "cover", R.interest_cover_zone(model, result))
 
-    # Row 4 — cash: quality, then the working-capital cycle behind it
     left, right = st.columns([1, 1.15])
     with left:
         bento("Earnings quality", "The gap between reported profit and actual cash",
@@ -544,12 +538,13 @@ def overview_tab(model, result) -> None:
         bento("Cash conversion cycle", "Collected and held, minus what suppliers fund",
               "ccc", R.cash_cycle_bridge(model))
 
-    # Row 5 — what the market already thinks
     bento("Valuation", "Today's P/E against the company's own history",
           "pe", R.valuation_strip(model))
 
 
 def ratios_tab(model, result) -> None:
+    ratio_bento(model, result)
+    st.write("")
     with card("Ratio scorecard — scored against sector bands"):
         chart(C.scorecard_bars(result), key="scorecard")
 

@@ -262,3 +262,11 @@ div[data-baseweb="popover"] li:hover { background: var(--green-dim) !important; 
 }
 .gauge-legend span { display:inline-flex; align-items:center; gap:7px; }
 .gauge-legend i { width:11px; height:11px; border-radius:50%; display:inline-block; }
+
+/* ---------- score drivers ---------- */
+.drv-list { display:flex; flex-direction:column; gap:11px; padding-top:2px; }
+.drv-row { display:grid; grid-template-columns:150px 1fr 26px; align-items:center; gap:12px; }
+.drv-name { font-size:13px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.drv-track { height:8px; border-radius:99px; background:#eceeec; overflow:hidden; }
+.drv-fill { display:block; height:100%; border-radius:99px; }
+.drv-val { font-family:ui-monospace,monospace; font-size:12px; font-weight:700; color:var(--ink); text-align:right; }

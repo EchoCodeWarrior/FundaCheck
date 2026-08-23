@@ -161,3 +161,137 @@ def valuation_panel(model) -> str:
     if not items:
         return ""
     return f'<div class="kr-list">{"".join(items)}</div>'
+
+
+def _latest(model, *names: str) -> float | None:
+    for name in names:
+        series = pd.to_numeric(model.series(name), errors="coerce").dropna()
+        if not series.empty:
+            return float(series.iloc[-1])
+    return None
+
+
+def _full_year_col(model) -> str | None:
+    """Most recent complete fiscal year — TTM/summary columns are skipped."""
+    for col in reversed(model.years):
+        if str(col).upper() in ("TTM", "TREND", "MEAN", "MEDIAN"):
+            continue
+        return col
+    return model.latest_year or None
+
+
+def _col(model, col, *names):
+    for name in names:
+        for frame in (model.historical, model.ratios):
+            if not frame.empty and name in frame.index and col in frame.columns:
+                v = pd.to_numeric(frame.loc[name, col], errors="coerce")
+                if pd.notna(v):
+                    return float(v)
+    return None
+
+
+def income_sankey(model):
+    """
+    'How <FY> revenue becomes profit' — the income-statement flow as inline SVG,
+    matching the FundaCheck design. Uses the last full fiscal year and derives
+    gross as sales - COGS so a blank Gross Margin cell cannot zero the flow.
+    Returns (title, svg).
+    """
+    year = _full_year_col(model)
+    if year is None:
+        return ("", "")
+    sales = _col(model, year, "Sales")
+    other = _col(model, year, "Other Income ", "Other Income") or 0.0
+    cogs = _col(model, year, "COGS")
+    pbt = _col(model, year, "Earnings Before Tax", "Profit before tax")
+    net = _col(model, year, "Net Profit", "Net profit")
+    tax = _col(model, year, "Tax")
+    if None in (sales, cogs, pbt, net) or not sales:
+        return ("", "")
+    if tax is None:
+        tax = max(0.0, pbt - net)
+    gross = sales - cogs
+    bucket = max(0.0, gross + other - pbt)
+    title = f"How {year} revenue becomes profit"
+
+    w, hh, top, gap = 620, 340, 34, 40
+    peak = sales + other or 1.0
+    scale = 232.0 / peak
+    S = lambda v: v * scale
+    x0, x1, x2, x3 = 96, 204, 336, 468
+
+    def flow(xa, ya, xb, yb, ht, colour, op):
+        mid = (xa + xb) / 2
+        d = (f"M {xa} {ya} C {mid} {ya}, {mid} {yb}, {xb} {yb} "
+             f"L {xb} {yb + ht} C {mid} {yb + ht}, {mid} {ya + ht}, {xa} {ya + ht} Z")
+        return f'<path d="{d}" fill="{colour}" opacity="{op}"/>'
+
+    def bar(x, y, ht, colour, label, val, sub, anchor):
+        tx = x - 7 if anchor == "end" else x + 15
+        parts = [
+            f'<rect x="{x}" y="{y}" width="9" height="{max(2, ht):.1f}" rx="2" fill="{colour}"/>',
+            f'<text x="{tx}" y="{y + 10:.1f}" text-anchor="{anchor}" '
+            f'font-size="10.5" font-weight="700" fill="{INK}">{label}</text>',
+            f'<text x="{tx}" y="{y + 22:.1f}" text-anchor="{anchor}" font-size="10" '
+            f'fill="#7d847f" font-family="ui-monospace,monospace">{val}</text>',
+        ]
+        if sub:
+            parts.append(
+                f'<text x="{tx}" y="{y + 33:.1f}" text-anchor="{anchor}" '
+                f'font-size="9.5" fill="#a4a9a6">{sub}</text>'
+            )
+        return "".join(parts)
+
+    y_sales, y_other = top, top + S(sales) + gap
+    g_top, c_top = top, top + S(gross) + gap
+    p_top, b_top = top, top + S(pbt) + gap
+    n_top, t_top = top, top + S(net) + gap
+
+    flows = "".join([
+        flow(x0 + 9, y_sales, x1, g_top, S(gross), "#3d9e6b", 0.30),
+        flow(x0 + 9, y_sales + S(gross), x1, c_top, S(cogs), "#c9803a", 0.26),
+        flow(x0 + 9, y_other, x2, p_top, S(other), "#5fd0a0", 0.30),
+        flow(x1 + 9, g_top, x2, p_top + S(other), S(pbt) - S(other), "#177245", 0.32),
+        flow(x1 + 9, g_top + S(pbt) - S(other), x2, b_top, S(bucket), "#b4483c", 0.24),
+        flow(x2 + 9, p_top, x3, n_top, S(net), "#177245", 0.38),
+        flow(x2 + 9, p_top + S(net), x3, t_top, S(tax), "#b4483c", 0.30),
+    ])
+    rate = f"{tax / pbt * 100:.1f}% rate" if pbt else None
+    g_margin = f"{gross / sales * 100:.1f}% margin" if sales else None
+    p_margin = f"{pbt / sales * 100:.1f}% margin" if sales else None
+    r = lambda v: f"₹{v:,.0f}"
+    bars = "".join([
+        bar(x0, y_sales, S(sales), "#9aa09d", "Sales", r(sales), None, "end"),
+        bar(x0, y_other, S(other), "#5fd0a0", "Other income", r(other), None, "end"),
+        bar(x1, g_top, S(gross), "#3d9e6b", "Gross profit", r(gross), g_margin, "start"),
+        bar(x1, c_top, S(cogs), "#c9803a", "Cost of goods", r(cogs), None, "start"),
+        bar(x2, p_top, S(pbt), "#177245", "Profit before tax", r(pbt), p_margin, "start"),
+        bar(x2, b_top, S(bucket), "#b4483c", "Opex, dep. & interest", r(bucket), None, "start"),
+        bar(x3, n_top, S(net), "#177245", "Net profit", r(net), None, "start"),
+        bar(x3, t_top, S(tax), "#b4483c", "Tax", r(tax), rate, "start"),
+    ])
+    svg = (
+        f'<svg viewBox="0 0 {w} {hh}" width="100%" style="max-width:640px;height:auto" '
+        f'role="img" aria-label="Income statement flow">{flows}{bars}</svg>'
+    )
+    return (title, svg)
+
+
+def score_drivers(result: Assessment) -> str:
+    """
+    'What moves the score' — each ratio's 0-100 sub-score as a mini bar.
+
+    The panel beside the verdict in the design: the metrics that pull the
+    composite up and down, strongest first.
+    """
+    ranked = sorted(result.metrics, key=lambda m: m.score, reverse=True)
+    rows = []
+    for m in ranked:
+        colour = GREEN if m.score >= 70 else "#b5761f" if m.score >= 45 else "#a4483f"
+        rows.append(
+            f'<div class="drv-row"><span class="drv-name">{m.metric}</span>'
+            f'<span class="drv-track"><span class="drv-fill" '
+            f'style="width:{m.score:.0f}%;background:{colour}"></span></span>'
+            f'<span class="drv-val">{m.score:.0f}</span></div>'
+        )
+    return f'<div class="drv-list">{"".join(rows)}</div>'
