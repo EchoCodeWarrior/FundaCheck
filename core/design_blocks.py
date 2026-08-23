@@ -140,10 +140,13 @@ def health_gauge(result: Assessment) -> str:
 
 
 def valuation_panel(model) -> str:
-    """Valuation multiples against the company's own 10-year median."""
-    rows = [("P/E Ratio", "PE Ratio", "x"), ("Price to Sales", "Price to Sales", "x")]
+    """
+    Valuation: the design's market-cap donut when the workbook supplies one,
+    above the multiples against the company's own 10-year median.
+    """
     items = []
-    for label, metric, unit in rows:
+    for label, metric, unit in (("P/E Ratio", "PE Ratio", "x"),
+                                ("Price to Sales", "Price to Sales", "x")):
         series = pd.to_numeric(model.series(metric), errors="coerce").dropna()
         series = series[(series > 0) & (series < 1000)]
         if series.empty:
@@ -158,9 +161,48 @@ def valuation_panel(model) -> str:
             f'<span class="kr-val">{latest:.1f}{unit} '
             f'<span class="{tone}">{arrow}</span></span></div>'
         )
-    if not items:
+
+    # --- market cap donut: cap / revenue / net income ---
+    mcap = model.meta.get("market_cap")
+    sales = pd.to_numeric(model.series("Sales"), errors="coerce").dropna()
+    profit = pd.to_numeric(model.series("Net Profit"), errors="coerce").dropna()
+    donut = ""
+    if mcap and not sales.empty and not profit.empty:
+        rev, net = float(sales.iloc[-1]), float(profit.iloc[-1])
+        if min(rev, net) > 0 < mcap:
+            segs = [("Market Cap", mcap, "#9aa09d"),
+                    ("Revenue", rev, "#177245"),
+                    ("Net income", net, "#5fd0a0")]
+            total = sum(v for _, v, _ in segs)
+            r, circ = 54.0, 2 * np.pi * 54.0
+            acc = 0.0
+            rings = []
+            for name, value, colour in segs:
+                dash = value / total * circ
+                rings.append(
+                    f'<circle cx="70" cy="70" r="{r}" fill="none" stroke="{colour}" '
+                    f'stroke-width="17" stroke-dasharray="{dash:.2f} {circ - dash:.2f}" '
+                    f'transform="rotate({-90 + acc / total * 360:.2f} 70 70)"/>'
+                )
+                acc += value
+            centre = _crore(mcap).replace(" cr", "")
+            donut = (
+                '<div class="val-donut">'
+                '<div class="val-ring"><svg width="140" height="140" viewBox="0 0 140 140">'
+                f'<circle cx="70" cy="70" r="{r}" fill="none" stroke="#f0f2f0" stroke-width="17"/>'
+                f'{"".join(rings)}</svg>'
+                f'<div class="val-centre"><div class="val-big">₹{centre}</div>'
+                '<div class="val-small">crore mcap</div></div></div>'
+                '<div class="val-rows">' + "".join(
+                    f'<div class="kr-row"><div><div class="kr-name">{n}</div></div>'
+                    f'<span class="val-leg"><i style="background:{c}"></i>'
+                    f'{_crore(v)}</span></div>'
+                    for n, v, c in segs) + "</div></div>"
+            )
+
+    if not items and not donut:
         return ""
-    return f'<div class="kr-list">{"".join(items)}</div>'
+    return donut + (f'<div class="kr-list">{"".join(items)}</div>' if items else "")
 
 
 def _latest(model, *names: str) -> float | None:

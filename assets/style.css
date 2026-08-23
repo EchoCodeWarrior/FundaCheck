@@ -1,4 +1,4 @@
-/* FinTerminal — dark analyst terminal theme.
+/* FinTerminal - dark analyst terminal theme.
    Green signal palette borrowed from the reference dashboards, on a near-black
    surface so the charts carry the colour and the chrome stays quiet. */
 
@@ -180,11 +180,11 @@ section[data-testid="stSidebar"] .block-container { padding-top: 1.6rem; }
 }
 
 /* ==========================================================================
-   v2 — depth, motion and a louder sidebar
+   v2 - depth, motion and a louder sidebar
    ========================================================================== */
 
 :root {
-  --s1: #1faa5e;   /* categorical slot 1 — brand green */
+  --s1: #1faa5e;   /* categorical slot 1 - brand green */
   --s2: #9085e9;
   --s3: #c98500;
   --good: #0ca30c;
@@ -249,7 +249,7 @@ section[data-testid="stSidebar"] .block-container { padding-top: 1.6rem; }
 }
 .kpi:hover::before { opacity: 1; }
 .kpi:hover { box-shadow: 0 10px 26px -18px var(--glow); }
-/* Proportional figures on display numbers — tabular digits belong in tables. */
+/* Proportional figures on display numbers - tabular digits belong in tables. */
 .kpi .value {
   font-family: 'Inter', system-ui, sans-serif;
   font-variant-numeric: proportional-nums;
@@ -399,7 +399,7 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] >
 }
 
 /* ==========================================================================
-   v3 — pinned sidebar nav, day/night, tighter grid
+   v3 - pinned sidebar nav, day/night, tighter grid
    ========================================================================== */
 
 /* ---------- the sidebar is furniture, not a drawer ----------
@@ -476,7 +476,7 @@ section[data-testid="stSidebar"] .stButton > button p {
 }
 
 /* ==========================================================================
-   v4 — bento grid, softer surfaces, scroll-reveal
+   v4 - bento grid, softer surfaces, scroll-reveal
    ========================================================================== */
 
 /* Less terminal, more product: rounder corners, softer contrast, real
@@ -499,7 +499,7 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"]
 }
 .kpi { border-radius: 16px; box-shadow: var(--shadow); }
 
-/* tile subtitle — the one line that says what the chart is for */
+/* tile subtitle - the one line that says what the chart is for */
 .tile-sub {
   margin: -.25rem 0 .35rem; font-size: .78rem; line-height: 1.45;
   color: var(--muted);
@@ -565,3 +565,139 @@ div[data-baseweb="select"] svg { fill: var(--muted) !important; }
 div[data-baseweb="popover"] li:hover { background: var(--green-dim) !important; }
 [data-testid="stWidgetLabel"] p, [data-testid="stCaptionContainer"] p { color: var(--muted) !important; }
 [data-testid="stFileUploaderDropzone"] * { color: var(--ink) !important; }
+
+/* ==========================================================================
+   v5 - design-matched top bar, hero shell, notes, peers
+   Structural rules here use the theme variables so dark mode stays coherent;
+   the light theme pins the exact design colours in light.css.
+   ========================================================================== */
+
+/* ---------- hero shell ----------
+   The masthead() helper writes .hero-marker as the first child of its
+   container; this selector paints the shell around every column inside. */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"]
+  > div[data-testid="stMarkdown"] .hero-marker) {
+  background: var(--surface-2);
+  border-radius: 22px;
+  padding: 24px 26px;
+}
+.hero-marker { height: 0; overflow: hidden; margin-bottom: -6px; }
+.hero-name {
+  font-size: 34px; font-weight: 800; letter-spacing: -1.2px;
+  color: var(--ink); line-height: 1.15;
+}
+.hero-sub {
+  font-family: ui-monospace, monospace; font-size: 12px; letter-spacing: 1px;
+  color: var(--muted); padding-top: 8px;
+}
+
+/* ---------- verdict chips row ---------- */
+.verdict-chips {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.verdict .sector-mono {
+  font-family: ui-monospace, monospace; font-size: 10px;
+  letter-spacing: 1.2px; color: var(--faint);
+}
+.drivers-card {
+  background: var(--surface); border-radius: 18px; padding: 20px 22px;
+  height: 100%; box-sizing: border-box;
+}
+
+/* ---------- KPI footer bits ---------- */
+.kpi .foot-note { font-size: 12.5px; color: var(--muted); }
+.kpi .mini {
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 6px; padding: 3px 7px; font-weight: 700; font-size: 11.5px;
+  margin-right: 7px;
+}
+.kpi .mini.good { color: var(--green, #2f9e63); background: rgba(47,158,99,.14); }
+.kpi .mini.warn { color: var(--amber, #b5761f); background: rgba(181,118,31,.14); }
+
+/* ---------- strengths / risks panels ---------- */
+.note-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding-bottom: 14px;
+}
+.note-head .nb-title { font-size: 17px; font-weight: 700; color: var(--ink); }
+.count-badge {
+  width: 28px; height: 28px; border-radius: 50%; color: #fff;
+  font-size: 12.5px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; flex: none;
+}
+.note-block li b { display: block; font-size: 14.5px; font-weight: 700; color: var(--ink); }
+.note-block li span.d { display: block; font-size: 12.5px; line-height: 1.55; padding-top: 4px; }
+
+/* ---------- peer comparison ---------- */
+.peer-list { display: flex; flex-direction: column; gap: 13px; }
+.peer-row { display: flex; align-items: center; gap: 13px; }
+.peer-avatar { width: 34px; height: 34px; border-radius: 11px; flex: none; }
+.peer-main { flex: 1; min-width: 0; }
+.peer-name {
+  font-size: 14.5px; font-weight: 600; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.peer-sub { font-size: 12px; color: var(--muted); padding-top: 2px; }
+.peer-sub .v { color: var(--ink); font-weight: 600; }
+.peer-chip {
+  font-size: 11.5px; font-weight: 700; border-radius: 8px;
+  padding: 5px 10px; white-space: nowrap; flex: none;
+}
+.peer-chip.chip-good { color: var(--green, #2f9e63); background: rgba(47,158,99,.13); }
+.peer-chip.chip-warn { color: #8a7a2e; background: rgba(217,164,65,.16); }
+.peer-chip.chip-bad  { color: #a4483f; background: rgba(164,72,63,.13); }
+
+/* ---------- export button (outlined pill) ---------- */
+[data-testid="stDownloadButton"] > button {
+  background: var(--surface); color: var(--ink);
+  border: 1.5px solid var(--green, #177245);
+  border-radius: 26px; font-weight: 700; padding: 14px 24px;
+  transition: background .18s ease, box-shadow .18s ease;
+}
+[data-testid="stDownloadButton"] > button:hover {
+  background: var(--green-dim, rgba(23,114,69,.08)); color: var(--ink);
+  border-color: var(--green, #177245);
+}
+
+/* ---------- main-area secondary actions (See all, Remove) ---------- */
+div[data-testid="stMain"], [data-testid="stMainBlockContainer"] ~ div { min-width: 0; }
+[data-testid="stMainBlockContainer"] .stButton > button[kind="secondary"] {
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 14px;
+  font-weight: 700;
+}
+section[data-testid="stSidebar"] ~ div .stButton > button[kind="secondary"]:hover,
+[data-testid="stMainBlockContainer"] .stButton > button[kind="secondary"]:hover {
+  border-color: var(--green, #177245); color: var(--ink);
+}
+
+/* ---------- Ask Analyst AI - gradient pill ---------- */
+[data-testid="stMainBlockContainer"] .stButton > button[kind="primary"] {
+  background: radial-gradient(130% 130% at 10% 0%, #2a9c62, #0d4a2c);
+  color: #fff; border: none; border-radius: 30px; font-weight: 700;
+  box-shadow: 0 10px 24px -14px rgba(13,74,44,.55);
+}
+[data-testid="stMainBlockContainer"] .stButton > button[kind="primary"]:hover {
+  background: radial-gradient(130% 130% at 10% 0%, #2fa96b, #0f5b34);
+  color: #fff;
+}
+
+/* ---------- day/night toggle pill ---------- */
+[data-testid="stMainBlockContainer"] label[data-testid="stToggleCheckbox"],
+[data-testid="stMainBlockContainer"] div[data-testid="stToggle"] {
+  background: var(--surface-2); border-radius: 24px; padding: 8px 14px 8px 10px;
+}
+
+/* ---------- valuation donut ---------- */
+.val-donut { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 14px 0 4px; }
+.val-ring { position: relative; width: 140px; height: 140px; flex: none; }
+.val-centre {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+}
+.val-big { font-size: 19px; font-weight: 800; letter-spacing: -.6px; color: var(--ink); }
+.val-small { font-size: 10.5px; color: var(--faint); }
+.val-rows { flex: 1; min-width: 130px; display: flex; flex-direction: column; gap: 10px; }
+.val-leg { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px;
+           color: var(--muted); font-family: ui-monospace, monospace; }
+.val-leg i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }

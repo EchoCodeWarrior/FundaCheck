@@ -122,17 +122,6 @@ def kpi_tile(label: str, value: str, delta: str = "", direction: str = "",
     )
 
 
-def note_list(title: str, items: list[str], kind: str = "") -> None:
-    if not items:
-        return
-    bullets = "".join(f"<li>{str(i)}</li>" for i in items)
-    st.markdown(
-        f'<div class="note-block {kind}"><div class="card-title">{title}</div>'
-        f"<ul>{bullets}</ul></div>",
-        unsafe_allow_html=True,
-    )
-
-
 def chart(fig, key: str) -> None:
     st.plotly_chart(fig, use_container_width=True, key=key,
                     config={"displayModeBar": False})
@@ -141,21 +130,6 @@ def chart(fig, key: str) -> None:
 # --------------------------------------------------------------------------
 # sidebar: data in, sector, LLM
 # --------------------------------------------------------------------------
-# The ten ratios the front page leads with. Order matters: profitability and
-# returns first, then risk, then momentum, cash quality and market context.
-HEADLINE_RATIOS: list[tuple[str, str, bool]] = [
-    ("Return on Equity (ROE) %", "ROE", True),
-    ("Return on Capital Employed (ROCE) %", "ROCE", True),
-    ("Net Profit Margin", "Net margin", True),
-    ("EBITDA Margin", "EBITDA margin", True),
-    ("Debt to Equity Ratio", "Debt / equity", False),
-    ("Interest Coverage Ratio", "Interest cover", True),
-    ("Sales Growth", "Sales growth", True),
-    ("CFO / Sales", "CFO / sales", True),
-    ("Cash Conversion Cycle", "Cash cycle", False),
-    ("PE Ratio", "P/E", True),
-]
-
 NAV_PAGES = [
     ("overview", "Dashboard"),
     ("ratios", "Ratio deep dive"),
@@ -192,7 +166,7 @@ def sidebar() -> tuple[object, str, str]:
         st.markdown(
             '<div class="side-brand"><div class="side-mark">F</div>'
             '<div><div class="name">FundaCheck</div>'
-            '<div class="tag">FUNDAMENTAL ANALYSIS</div></div></div>',
+            '<div class="tag">FUNDAMENTAL TERMINAL</div></div></div>',
             unsafe_allow_html=True,
         )
 
@@ -211,13 +185,9 @@ def sidebar() -> tuple[object, str, str]:
                          type="primary" if active else "secondary"):
                 navigate_to = key
 
-        st.markdown('<div class="nav-head">GENERAL</div>', unsafe_allow_html=True)
+        # Day/Night lives in the main-area top bar now (the design puts it there);
+        # only the default is seeded here so the first paint is themed correctly.
         st.session_state.setdefault("dark_mode", False)
-        dark = st.toggle(
-            "Dark mode", key="dark_mode",
-            help="Both themes use their own validated palette — the light one is "
-                 "a separate set of colours, not the dark set inverted.",
-        )
 
         step(1, "Your data")
         upload = st.file_uploader(
@@ -275,19 +245,62 @@ def sidebar() -> tuple[object, str, str]:
         st.session_state.page = navigate_to
         st.rerun()
 
-    C.set_theme("dark" if dark else "light")
+    C.set_theme("dark" if st.session_state.get("dark_mode") else "light")
     return source, sector_key, source_label
 
 
 # --------------------------------------------------------------------------
 # page sections
 # --------------------------------------------------------------------------
-def masthead(model, sector_name: str) -> None:
+def topbar() -> None:
     """
-    The page hero: company, sector, last traded price and market cap.
+    The design's top bar: search field, day/night pill and the Ask Analyst AI
+    button. Every control is real — search filters the statements tables, the
+    pill flips the theme, the button jumps to the analyst page.
+    """
+    search_col, theme_col, ai_col = st.columns([3.2, 1.05, 1.75], gap="small")
+    with search_col:
+        st.text_input(
+            "Search", key="search_q",
+            placeholder="🔍  Search company or ticker",
+            label_visibility="collapsed",
+        )
+    with theme_col:
+        # The toggle owns dark_mode directly; the sidebar no longer repeats it.
+        st.toggle("Night" if st.session_state.get("dark_mode", False) else "Day",
+                  key="dark_mode")
+    with ai_col:
+        if st.button("✦  Ask Analyst AI", key="top-ai", use_container_width=True,
+                     type="primary"):
+            st.session_state.page = "qa"
+            st.rerun()
 
-    Laid out per the FundaCheck design — the name at display size, the market
-    data in its own white card to the right.
+
+def _export_report(model, result) -> bytes:
+    """Plain-text report for the Export Report button."""
+    lines = [
+        f"FundaCheck report — {model.company.title()}",
+        f"Sector lens : {result.sector.name}",
+        f"Score       : {result.total_score:.0f}/100 ({result.verdict})",
+        "",
+        f"{'METRIC':<38}{'LATEST':>14}{'WEAK AT':>12}{'STRONG AT':>12}{'SCORE':>8}",
+        "-" * 84,
+    ]
+    for m in result.metrics:
+        lines.append(
+            f"{m.metric:<38}{m.display(m.latest):>14}"
+            f"{m.display(m.weak_at):>12}{m.display(m.strong_at):>12}"
+            f"{round(m.score):>8}"
+        )
+    lines += ["", f"Periods covered: {model.years[0]}–{model.latest_year}"]
+    return "\n".join(lines).encode()
+
+
+def masthead(model, sector_name: str, result) -> None:
+    """
+    The page hero, as one rounded shell per the design: company name and
+    sector line on the left, market data in its own white card, then the
+    outlined Export Report action.
     """
     price = model.meta.get("current_price")
     mcap = model.meta.get("market_cap")
@@ -305,174 +318,248 @@ def masthead(model, sector_name: str) -> None:
         if stats:
             stats += '<div class="hero-rule"></div>'
         stats += f'<div><div class="lbl">MKT CAP</div><div class="val">{pretty}</div></div>'
-    if stats:
-        stats = f'<div class="hero-stat">{stats}</div>'
 
-    st.markdown(
-        f"""
-        <div class="masthead">
-          <div style="display:flex;align-items:flex-start;gap:20px;flex-wrap:wrap">
-            <div>
-              <h1>{model.company.title()}</h1>
-              <div class="sub">{sector_name.upper()} &nbsp;·&nbsp;
-                   {model.years[0]}–{model.latest_year} &nbsp;·&nbsp;
-                   {len(model.years)} PERIODS</div>
-            </div>
-            <div style="margin-left:auto">{stats}</div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    with st.container():
+        # The marker lets the stylesheet find this container and paint the
+        # shell around all three columns (same trick the card() helper uses).
+        st.markdown('<div class="hero-marker"></div>', unsafe_allow_html=True)
+        name_col, stat_col, btn_col = st.columns(
+            [2.1, 1.6, 1.05], gap="small", vertical_alignment="center")
+        with name_col:
+            st.markdown(
+                f'<div class="hero-name">{model.company.title()}</div>'
+                f'<div class="hero-sub">{sector_name.upper()} &nbsp;·&nbsp; '
+                f'{model.years[0]}–{model.latest_year} &nbsp;·&nbsp; '
+                f'{len(model.years)} PERIODS</div>',
+                unsafe_allow_html=True,
+            )
+        if stats:
+            with stat_col:
+                st.markdown(f'<div class="hero-stat">{stats}</div>',
+                            unsafe_allow_html=True)
+        with btn_col:
+            st.download_button(
+                "Export Report", data=_export_report(model, result),
+                file_name=f"{model.company}_fundacheck_report.txt",
+                mime="text/plain", key="export-report", use_container_width=True,
+            )
 
 
 def kpi_row(model, result) -> None:
     """
-    The ten ratios that carry a fundamental call, five to a row.
-
-    Each tile shows the latest value, the year-on-year move, a sparkline, and —
-    where the sector defines a band for it — whether the number currently sits
-    in the strong, adequate or weak zone for THIS sector.
+    The design's four lead cards: the score, then the three ratios an analyst
+    reaches for first — P/E against its own history, ROE year on year, and
+    leverage against the sector comfort zone.
     """
-    # The design leads with the score itself, then the ratios behind it.
-    # Card order follows the design: the score, then the three ratios an analyst
-    # reaches for first, then everything else in fours.
-    by_metric = {metric: (metric, label, higher) for metric, label, higher in HEADLINE_RATIOS}
-    lead_metrics = ["PE Ratio", "Return on Equity (ROE) %", "Debt to Equity Ratio"]
-    rest = [row for row in HEADLINE_RATIOS if row[0] not in lead_metrics]
+    def series_of(metric: str):
+        return pd.to_numeric(model.series(metric), errors="coerce").dropna()
 
-    lead = st.columns(4)
-    with lead[0]:
+    score_col, pe_col, roe_col, de_col = st.columns(4)
+
+    with score_col:
         kpi_tile(
             "Funda Score", f"{result.total_score:.0f}<small>/100</small>",
-            footer=f'<span class="band">{result.verdict} · sector adjusted</span>',
+            footer=f'<span class="band">{result.verdict}</span>sector adjusted',
             variant="kpi-score",
         )
-    for column, metric in zip(lead[1:], lead_metrics):
-        if metric in by_metric:
-            _ratio_tile(model, result, column, *by_metric[metric])
-    st.write("")
 
-    for chunk in (rest[:4], rest[4:]):
-        columns = st.columns(4)
-        for column, (metric, label, higher_better) in zip(columns, chunk):
-            _ratio_tile(model, result, column, metric, label, higher_better)
-        st.write("")
+    with pe_col:
+        pe = series_of("PE Ratio")
+        pe = pe[(pe > 0) & (pe < 1000)]
+        if pe.empty:
+            kpi_tile("P/E Ratio", "n/a", "not in this workbook")
+        else:
+            latest, median = float(pe.iloc[-1]), float(pe.median())
+            cheaper = latest < median
+            kpi_tile(
+                "P/E Ratio", f"{latest:.1f}",
+                footer=f'<span class="mini {"good" if cheaper else "warn"}">'
+                       f'{"▼" if cheaper else "▲"}</span>'
+                       f'10-yr median {median:.1f}',
+            )
 
-
-def _ratio_tile(model, result, column, metric: str, label: str,
-                higher_better: bool) -> None:
-    """One headline-ratio card: value, year-on-year move, and its sector band."""
-    series = model.series(metric).dropna()
-    with column:
-        if series.empty:
-            kpi_tile(label, "n/a", "not in this workbook")
-            return
-
-        latest = float(series.iloc[-1])
-        delta_text, direction = "", ""
-        if len(series) > 1:
-            previous = float(series.iloc[-2])
-            if previous:
-                change = (latest - previous) / abs(previous) * 100
-                improving = change >= 0 if higher_better else change < 0
+    with roe_col:
+        roe = series_of("Return on Equity (ROE) %")
+        if roe.empty:
+            kpi_tile("Return on Equity", "n/a", "not in this workbook")
+        else:
+            latest = float(roe.iloc[-1])
+            delta_text, direction = "", ""
+            prev_label = ""
+            if len(roe) > 1:
+                previous = float(roe.iloc[-2])
+                change = latest - previous
+                improving = change >= 0
                 direction = "up" if improving else "down"
-                delta_text = f"{'▲' if change >= 0 else '▼'} {abs(change):.1f}% YoY"
+                arrow = "▲" if improving else "▼"
+                delta_text = f"{change:+.1f} {arrow}"
+                prev_label = f"{roe.index[-2]} was {previous:.1f}%"
+            kpi_tile(
+                "Return on Equity", f"{latest:.1f}%", delta_text, direction,
+                footer=prev_label,
+            )
 
-        scored = result.metric(metric)
-        band_html = ""
-        if scored is not None:
-            tone = "good" if scored.score >= 70 else "warn" if scored.score >= 45 else "bad"
-            band_html = f'<span class="band {tone}">{scored.verdict} for sector</span>'
-
-        kpi_tile(
-            label, fmt(latest, metric), delta_text, direction,
-            spark=C.sparkline_svg(series.tail(9), higher_better),
-            period=str(series.index[-1]), footer=band_html,
-        )
+    with de_col:
+        de = series_of("Debt to Equity Ratio")
+        scored = result.metric("Debt to Equity Ratio")
+        if de.empty:
+            kpi_tile("Debt / Equity", "n/a", "not in this workbook")
+        else:
+            note = ("Comfortably within sector norms"
+                    if scored is None or scored.score >= 66 else
+                    "Within sector norms, cover is thin"
+                    if scored.score >= 40 else
+                    "Above the sector comfort zone")
+            kpi_tile("Debt / Equity", f"{float(de.iloc[-1]):.2f}", footer=note)
 
 
 def verdict_panel(result, note: dict) -> None:
-    left, right = st.columns([1.35, 1])
-    with left:
+    """The verdict card with the score drivers living inside it."""
+    emoji = {"STRONG": "😃", "NEUTRAL": "😐"}.get(result.verdict, "😕")
+    drivers = D.score_drivers(result)
+    text_col, driver_col = st.columns([1.5, 1], gap="medium")
+    with text_col:
         st.markdown(
             f"""
             <div class="verdict" style="--accent:{result.colour};--amber-rail:{result.colour}">
-              <span class="tag" style="color:{result.colour};
-                    border:1px solid {result.colour}55; background:{result.colour}18;">
-                {result.verdict}
-              </span>
-              <h2 style="color:{result.colour}">{result.headline}</h2>
+              <div class="verdict-chips">
+                <span class="tag" style="color:{result.colour};
+                      border:1px solid {result.colour}55; background:{result.colour}18;">
+                  {result.verdict}
+                </span>
+                <span class="sector-mono">SECTOR AWARE · {result.sector.name.upper()}</span>
+              </div>
+              <h2 style="color:{result.colour}">{result.headline} {emoji}</h2>
               <p>{note.get('summary', '')}</p>
             </div>
             """,
             unsafe_allow_html=True,
         )
-        st.write("")
-        quality = (
-            f"{result.earnings_quality:.2f}x" if result.earnings_quality is not None else "n/a"
+    with driver_col:
+        st.markdown('<div class="drivers-card"><div class="card-title">Score drivers'
+                    f'</div>{drivers}</div>', unsafe_allow_html=True)
+
+
+def _split_note(text: str) -> tuple[str, str]:
+    """Split 'Net profit growth 29.3% — well above…' into title + description."""
+    for sep in (" — ", " – ", ": "):
+        if sep in text:
+            head, _, tail = text.partition(sep)
+            return head.strip(), tail.strip()
+    cut = text.find(". ")
+    if 30 < cut < 110:
+        return text[:cut].strip(), text[cut + 1:].strip()
+    return text.strip(), ""
+
+
+def strength_risk_panels(note: dict, result) -> None:
+    """Tinted strengths / risks panels with count badges and a See all toggle."""
+    show_all = st.session_state.get("show_all_notes", False)
+    limit = None if show_all else 3
+
+    strengths_all = list(note.get("strengths") or result.strengths)
+    risks_all = list(note.get("risks") or result.concerns)
+    strengths = strengths_all if limit is None else strengths_all[:limit]
+    risks = risks_all if limit is None else risks_all[:limit]
+
+    def panel(title: str, items: list[str], kind: str, colour: str):
+        bullets = "".join(
+            f"<li><b>{t}</b><span class='d'>{d}</span></li>"
+            for t, d in (_split_note(str(i)) for i in items)
         )
-        covered = len(result.metrics)
-        strip = st.columns(3)
-        with strip[0]:
-            kpi_tile("Earnings quality", quality, "3Y avg CFO / PAT")
-        with strip[1]:
-            kpi_tile("Ratios scored", f"{covered}", f"{len(result.data_gaps)} not found")
-        with strip[2]:
-            best = max(result.pillar_scores, key=result.pillar_scores.get)
-            kpi_tile("Strongest pillar", best.title(),
-                     f"{result.pillar_scores[best]:.0f}/100")
-        st.write("")
+        st.markdown(
+            f'<div class="note-block {kind}"><div class="note-head">'
+            f'<span class="nb-title">{title}</span>'
+            f'<span class="count-badge" style="background:{colour}">'
+            f'{len(items)}</span></div><ul>{bullets}</ul></div>',
+            unsafe_allow_html=True,
+        )
 
-        if note.get("sector_context"):
-            st.markdown(
-                f'<div class="note-block"><div class="card-title">Sector context · '
-                f'{result.sector.name}</div><p style="margin:.35rem 0 0;font-size:.89rem;'
-                f'line-height:1.55">{note["sector_context"]}</p></div>',
-                unsafe_allow_html=True,
-            )
+    left, right = st.columns(2, gap="small")
+    with left:
+        panel("Ratio Strengths", strengths, "strong", "#177245")
     with right:
-        with card("What moves the score"):
-            st.markdown(D.score_drivers(result), unsafe_allow_html=True)
+        panel("Ratio Risks", risks, "risk", "#a4483f")
+
+    if st.button("See all" if not show_all else "Show fewer",
+                 key="toggle-notes", use_container_width=True):
+        st.session_state.show_all_notes = not show_all
+        st.rerun()
 
 
-def analyst_note(result, note: dict) -> None:
-    if note.get("_error"):
-        st.warning(f"LLM call failed, showing the rule-based note instead. ({note['_error']})")
-    columns = st.columns(3)
-    with columns[0]:
-        note_list("Strengths", note.get("strengths", []) or result.strengths)
-    with columns[1]:
-        note_list("Risks", note.get("risks", []) or result.concerns, kind="risk")
-    with columns[2]:
-        note_list("What to watch", note.get("what_to_watch", []), kind="watch")
+def peers_panel() -> None:
+    """
+    The design's Peer Comparison card. Peers are user-entered (the workbook
+    carries no peer set), held in session state so they survive reruns.
+    """
+    peers = st.session_state.setdefault("peers", [])
+    avatar_bg = ["#e8f1ec", "#f2f0e6", "#f0eaf2", "#f6ebe6"]
 
-    source = "rule-based engine" if note.get("_offline") else f"LLM · {note.get('_model', '')}"
-    st.markdown(
-        f'<p class="caption-mono">Commentary source: {source} &nbsp;·&nbsp; '
-        f'confidence: {note.get("confidence", "n/a")}</p>',
-        unsafe_allow_html=True,
-    )
+    rows = []
+    for i, p in enumerate(peers):
+        roe, de, pe = p.get("roe"), p.get("de"), p.get("pe")
+        sub = f'ROE <span class="v">{roe:.1f}%</span>' if roe is not None else "ROE n/a"
+        sub += f" · D/E {de:.2f}" if de is not None else ""
+        if pe is not None and pe > 0:
+            tone = "chip-bad" if pe >= 45 else "chip-warn" if pe >= 32 else "chip-good"
+            chip = f'<span class="peer-chip {tone}">P/E {pe:.1f}</span>'
+        else:
+            chip = '<span class="peer-chip chip-bad">Loss</span>'
+        rows.append(
+            f'<div class="peer-row"><div class="peer-avatar" '
+            f'style="background:{avatar_bg[i % len(avatar_bg)]}"></div>'
+            f'<div class="peer-main"><div class="peer-name">{p["name"]}</div>'
+            f'<div class="peer-sub">{sub}</div></div>{chip}</div>'
+        )
+    body = ('<div class="peer-list">' + "".join(rows) + "</div>") if rows else \
+           '<p class="tile-sub">No peers yet — add companies to compare them side by side.</p>'
 
+    with st.container():
+        head_left, head_right = st.columns([2.4, 1], vertical_alignment="center")
+        with head_left:
+            st.markdown('<div class="card-title">Peer Comparison</div>',
+                        unsafe_allow_html=True)
+        with head_right:
+            add = st.toggle("+ Add Peer", key="add-peer-on")
 
-def bento(title: str, subtitle: str, key: str, figure, span: str = "") -> None:
-    """One bento tile: a titled card wrapping a single chart."""
-    with card(title):
-        if subtitle:
-            st.markdown(f'<p class="tile-sub">{subtitle}</p>', unsafe_allow_html=True)
-        chart(figure, key=key)
+        if add:
+            with st.form("add-peer"):
+                name = st.text_input("Company")
+                c1, c2, c3 = st.columns(3)
+                pe = c1.number_input("P/E", min_value=0.0, step=0.1)
+                roe = c2.number_input("ROE %", step=0.1)
+                de = c3.number_input("Debt / Equity", step=0.05)
+                if st.form_submit_button("Add to comparison") and name.strip():
+                    peers.append({"name": name.strip(), "pe": pe or None,
+                                  "roe": roe, "de": de})
+                    st.session_state.add_peer_on = False
+                    st.rerun()
+
+        st.markdown(body, unsafe_allow_html=True)
+
+        if peers:
+            rm_col, btn_col = st.columns([2, 1], vertical_alignment="center")
+            idx = rm_col.selectbox(
+                "Remove a peer", options=list(range(len(peers))), index=None,
+                format_func=lambda i: peers[i]["name"], placeholder="Remove a peer…",
+                label_visibility="collapsed",
+            )
+            if btn_col.button("Remove selected", disabled=idx is None,
+                              use_container_width=True):
+                peers.pop(idx)
+                st.rerun()
 
 
 def design_panels(model, result) -> None:
-    """The Revenue Trend / Valuation / Key Ratios / Health row from the design."""
+    """Revenue Trend / Valuation / Key Ratios, then Peers / Health, then flow."""
     left, middle, right = st.columns([1.25, 1, 1])
     with left:
         with card("Revenue Trend"):
             st.markdown(D.revenue_trend(model), unsafe_allow_html=True)
     with middle:
         with card("Valuation"):
-            st.markdown('<p class="tile-sub">Multiples against the company\'s own '
-                        'history</p>', unsafe_allow_html=True)
+            st.markdown('<p class="tile-sub">Fundamental metrics to determine fair value'
+                        '</p>', unsafe_allow_html=True)
             st.markdown(D.valuation_panel(model), unsafe_allow_html=True)
     with right:
         with card("Key Ratios"):
@@ -481,11 +568,10 @@ def design_panels(model, result) -> None:
     st.write("")
     left, right = st.columns([1, 1])
     with left:
+        peers_panel()
+    with right:
         with card("Financial Health"):
             st.markdown(D.health_gauge(result), unsafe_allow_html=True)
-    with right:
-        with card("Five-pillar profile"):
-            chart(C.pillar_radar(result), key="radar")
 
     st.write("")
     sankey_title, sankey_svg = D.income_sankey(model)
@@ -494,6 +580,14 @@ def design_panels(model, result) -> None:
             st.markdown('<p class="tile-sub">Income statement flow, ₹ crore</p>',
                         unsafe_allow_html=True)
             st.markdown(sankey_svg, unsafe_allow_html=True)
+
+
+def bento(title: str, subtitle: str, key: str, figure, span: str = "") -> None:
+    """One bento tile: a titled card wrapping a single chart."""
+    with card(title):
+        if subtitle:
+            st.markdown(f'<p class="tile-sub">{subtitle}</p>', unsafe_allow_html=True)
+        chart(figure, key=key)
 
 
 def overview_tab(model, result) -> None:
@@ -581,6 +675,8 @@ def ratios_tab(model, result) -> None:
 
 
 def statements_tab(model) -> None:
+    # The top-bar search filters every statement table by row name.
+    query = (st.session_state.get("search_q") or "").strip().lower()
     tabs = st.tabs(["Historical financials", "Ratio analysis", "Common size"])
     frames = [model.historical, model.ratios, model.common_size]
     names = ["historical", "ratios", "common_size"]
@@ -589,6 +685,11 @@ def statements_tab(model) -> None:
             if frame.empty:
                 st.info("This sheet was not found in the uploaded workbook.")
                 continue
+            if query:
+                frame = frame[frame.index.astype(str).str.lower().str.contains(query)]
+                if frame.empty:
+                    st.info(f'No rows match "{query}".')
+                    continue
             styled = frame.style.format("{:,.2f}", na_rep="—")
             try:
                 # A row-wise gradient makes trends readable at a glance.
@@ -688,9 +789,10 @@ def main() -> None:
     config = analyst_config()
 
     if source is None:
+        topbar()
         st.markdown(
-            '<div class="masthead"><div><h1><span class="brand-dot"></span>FundaCheck</h1>'
-            '<div class="sub">UPLOAD A 3-STATEMENT MODEL TO BEGIN</div></div></div>',
+            '<div class="masthead"><h1>FundaCheck</h1>'
+            '<div class="sub">UPLOAD A 3-STATEMENT MODEL TO BEGIN</div></div>',
             unsafe_allow_html=True,
         )
         st.markdown(
@@ -746,17 +848,23 @@ def main() -> None:
         return
 
     page = st.session_state.get("page", "overview")
-    masthead(model, sector.name)
+    topbar()
+    masthead(model, sector.name, result)
 
     if page == "overview":
         kpi_row(model, result)
+        st.write("")
 
         with st.spinner("Writing the analyst note…"):
             note = analyse(result, config)
 
         verdict_panel(result, note)
         st.write("")
-        analyst_note(result, note)
+        strength_risk_panels(note, result)
+
+        if note.get("_error"):
+            st.warning(f"LLM call failed, showing the rule-based note instead. "
+                       f"({note['_error']})")
 
         if result.data_gaps:
             st.caption(

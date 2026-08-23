@@ -1,5 +1,5 @@
 /* ==========================================================================
-   FundaCheck design system — light theme (primary)
+   FundaCheck design system - light theme (primary)
 
    Values come from the FundaCheck_Dashboard / FundaCheck_Terminal artboards:
    Plus Jakarta Sans, #177245 brand green, #ececeb page, white cards on 18-22px
@@ -270,3 +270,46 @@ div[data-baseweb="popover"] li:hover { background: var(--green-dim) !important; 
 .drv-track { height:8px; border-radius:99px; background:#eceeec; overflow:hidden; }
 .drv-fill { display:block; height:100%; border-radius:99px; }
 .drv-val { font-family:ui-monospace,monospace; font-size:12px; font-weight:700; color:var(--ink); text-align:right; }
+
+/* ==========================================================================
+   v5 - exact design values for the new components (light theme)
+   ========================================================================== */
+
+/* ---------- hero shell ---------- */
+.hero-name { font-size: 38px; letter-spacing: -1.2px; }
+.hero-sub { color: #8b918e; }
+
+/* ---------- top bar ---------- */
+.stTextInput input {
+  background: #f5f6f5 !important;
+  border: 1px solid transparent !important;
+  border-radius: 14px !important;
+  font-size: 14.5px !important;
+}
+.stTextInput input::placeholder { color: #9aa09d !important; }
+
+[data-testid="stMainBlockContainer"] label[data-testid="stWidgetLabel"] p,
+[data-testid="stMainBlockContainer"] [data-testid="stToggle"] p {
+  font-size: 13px !important; font-weight: 700; color: #5f6663 !important;
+}
+
+/* ---------- KPI footer chips ---------- */
+.kpi .mini.good { color: var(--green); background: var(--green-dim); }
+.kpi .mini.warn { color: var(--amber); background: var(--amber-bg); }
+.kpi .band { margin-right: 6px; }
+
+/* ---------- strengths / risks panels ---------- */
+.note-block.strong { background: #f0f7f3; }
+.note-block.risk { background: #fcf1ef; }
+.note-block.watch { background: #f3f1f8; }
+.note-block li b { color: var(--ink); }
+.note-block li span.d { color: #7d847f; }
+.count-badge { background: var(--green); }
+
+/* ---------- main-area buttons ---------- */
+[data-testid="stMainBlockContainer"] .stButton > button[kind="secondary"] {
+  background: var(--surface); border-color: #e6e9e7;
+}
+[data-testid="stMainBlockContainer"] .stButton > button[kind="secondary"]:hover {
+  border-color: #cfded5; background: #f7faf8;
+}
