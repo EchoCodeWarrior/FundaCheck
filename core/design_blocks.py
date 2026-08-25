@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from html import escape
 
 from .scoring import Assessment
 
@@ -265,25 +266,32 @@ def income_sankey(model):
     S = lambda v: v * scale
     x0, x1, x2, x3 = 96, 204, 336, 468
 
-    def flow(xa, ya, xb, yb, ht, colour, op):
+    def flow(xa, ya, xb, yb, ht, colour, op, tip):
         mid = (xa + xb) / 2
         d = (f"M {xa} {ya} C {mid} {ya}, {mid} {yb}, {xb} {yb} "
              f"L {xb} {yb + ht} C {mid} {yb + ht}, {mid} {ya + ht}, {xa} {ya + ht} Z")
-        return f'<path d="{d}" fill="{colour}" opacity="{op}"/>'
+        return (f'<path data-tt="{tip}" d="{d}" fill="{colour}" opacity="{op}" '
+                f'style="cursor:pointer"/>')
 
-    def bar(x, y, ht, colour, label, val, sub, anchor):
+    def bar(x, y, ht, colour, label, val, sub, anchor, show_val=False):
+        """Names always; values only when show_val (Sales / Net profit) —
+        everything else lives in the hover tooltip."""
         tx = x - 7 if anchor == "end" else x + 15
+        tip = escape(f"{label}: {val}" + (f" · {sub}" if sub else ""), quote=True)
         parts = [
-            f'<rect x="{x}" y="{y}" width="9" height="{max(2, ht):.1f}" rx="2" fill="{colour}"/>',
+            f'<rect data-tt="{tip}" x="{x}" y="{y}" width="9" '
+            f'height="{max(2, ht):.1f}" rx="2" fill="{colour}" '
+            f'style="cursor:pointer"/>',
             f'<text x="{tx}" y="{y + 10:.1f}" text-anchor="{anchor}" '
-            f'font-size="10.5" font-weight="700" fill="{INK}">{label}</text>',
-            f'<text x="{tx}" y="{y + 22:.1f}" text-anchor="{anchor}" font-size="10" '
-            f'fill="#7d847f" font-family="ui-monospace,monospace">{val}</text>',
+            f'font-size="11" font-weight="700" fill="{INK}" '
+            f'style="pointer-events:none">{label}</text>',
         ]
-        if sub:
+        if show_val:
             parts.append(
-                f'<text x="{tx}" y="{y + 33:.1f}" text-anchor="{anchor}" '
-                f'font-size="9.5" fill="#a4a9a6">{sub}</text>'
+                f'<text x="{tx}" y="{y + 22:.1f}" text-anchor="{anchor}" '
+                f'font-size="10" fill="#7d847f" '
+                f'font-family="ui-monospace,monospace" '
+                f'style="pointer-events:none">{val}</text>'
             )
         return "".join(parts)
 
@@ -292,34 +300,47 @@ def income_sankey(model):
     p_top, b_top = top, top + S(pbt) + gap
     n_top, t_top = top, top + S(net) + gap
 
-    flows = "".join([
-        flow(x0 + 9, y_sales, x1, g_top, S(gross), "#3d9e6b", 0.30),
-        flow(x0 + 9, y_sales + S(gross), x1, c_top, S(cogs), "#c9803a", 0.26),
-        flow(x0 + 9, y_other, x2, p_top, S(other), "#5fd0a0", 0.30),
-        flow(x1 + 9, g_top, x2, p_top + S(other), S(pbt) - S(other), "#177245", 0.32),
-        flow(x1 + 9, g_top + S(pbt) - S(other), x2, b_top, S(bucket), "#b4483c", 0.24),
-        flow(x2 + 9, p_top, x3, n_top, S(net), "#177245", 0.38),
-        flow(x2 + 9, p_top + S(net), x3, t_top, S(tax), "#b4483c", 0.30),
-    ])
     rate = f"{tax / pbt * 100:.1f}% rate" if pbt else None
     g_margin = f"{gross / sales * 100:.1f}% margin" if sales else None
     p_margin = f"{pbt / sales * 100:.1f}% margin" if sales else None
     r = lambda v: f"₹{v:,.0f}"
+
+    flows = "".join([
+        flow(x0 + 9, y_sales, x1, g_top, S(gross), "#3d9e6b", 0.30,
+             escape(f"Sales to Gross profit: {r(gross)}", quote=True)),
+        flow(x0 + 9, y_sales + S(gross), x1, c_top, S(cogs), "#c9803a", 0.26,
+             escape(f"Sales to Cost of goods: {r(cogs)}", quote=True)),
+        flow(x0 + 9, y_other, x2, p_top, S(other), "#5fd0a0", 0.30,
+             escape(f"Other income to PBT: {r(other)}", quote=True)),
+        flow(x1 + 9, g_top, x2, p_top + S(other), S(pbt) - S(other), "#177245", 0.32,
+             escape(f"Gross profit to PBT: {r(pbt - other)}", quote=True)),
+        flow(x1 + 9, g_top + S(pbt) - S(other), x2, b_top, S(bucket), "#b4483c", 0.24,
+             escape(f"Opex, dep. & interest: {r(bucket)}", quote=True)),
+        flow(x2 + 9, p_top, x3, n_top, S(net), "#177245", 0.38,
+             escape(f"PBT to Net profit: {r(net)}", quote=True)),
+        flow(x2 + 9, p_top + S(net), x3, t_top, S(tax), "#b4483c", 0.30,
+             escape(f"Tax: {r(tax)}", quote=True)),
+    ])
     bars = "".join([
-        bar(x0, y_sales, S(sales), "#9aa09d", "Sales", r(sales), None, "end"),
+        bar(x0, y_sales, S(sales), "#9aa09d", "Sales", r(sales), None, "end",
+            show_val=True),
         bar(x0, y_other, S(other), "#5fd0a0", "Other income", r(other), None, "end"),
         bar(x1, g_top, S(gross), "#3d9e6b", "Gross profit", r(gross), g_margin, "start"),
         bar(x1, c_top, S(cogs), "#c9803a", "Cost of goods", r(cogs), None, "start"),
         bar(x2, p_top, S(pbt), "#177245", "Profit before tax", r(pbt), p_margin, "start"),
         bar(x2, b_top, S(bucket), "#b4483c", "Opex, dep. & interest", r(bucket), None, "start"),
-        bar(x3, n_top, S(net), "#177245", "Net profit", r(net), None, "start"),
+        bar(x3, n_top, S(net), "#177245", "Net profit", r(net), None, "start",
+            show_val=True),
         bar(x3, t_top, S(tax), "#b4483c", "Tax", r(tax), rate, "start"),
     ])
     svg = (
         f'<svg viewBox="0 0 {w} {hh}" width="100%" style="max-width:640px;height:auto" '
-        f'role="img" aria-label="Income statement flow">{flows}{bars}</svg>'
+        f'role="img" aria-label="Income statement flow">'
+        f'<style>.sankey [data-tt]{{transition:opacity .15s}}'
+        f'.sankey [data-tt]:hover{{opacity:.55}}</style>'
+        f'<g class="sankey">{flows}{bars}</g></svg>'
     )
-    return (title, svg)
+    return (title + "  ·  hover any flow for values", svg)
 
 
 def score_drivers(result: Assessment) -> str:
