@@ -753,7 +753,13 @@ def dashboard_shell(model, result, note: dict, peers: list[dict]) -> tuple[str, 
         body += (f'<div class="card"><div class="ct">{_esc(sankey_title)}</div>'
                  f'<div class="csub">Income statement flow, \u20b9 crore</div>'
                  f"{sankey_svg}</div>")
-    return _doc(body, ""), HEIGHTS["dashboard"]
+    # Height is content-aware so a sparse workbook (no Sankey, no peers) does not
+    # trail a tall band of empty space below the last card, while a full one still
+    # gets the room it needs. scrolling=True is the safety net if content wraps
+    # taller than estimated on a narrow window. Calibrated to the demo model,
+    # whose wide-screen content lands at ~3150px with the Sankey present.
+    height = 2780 + (380 if sankey_svg else 0) + max(0, len(peers)) * 58
+    return _doc(body, ""), height
 
 
 def _gauge_inline_legend() -> str:

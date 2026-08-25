@@ -102,19 +102,19 @@ section[data-testid="stSidebar"]{
 .side-mark{border-radius:50%!important;
   background:linear-gradient(135deg,#37d67a,#1faa5e)!important;color:#06120c!important}
 .side-brand .name{color:#f2f7f4!important}
-.side-brand .tag{color:#9aa8a1!important}
-.nav-head,.step{color:#9aa8a1!important}
-.step .n{background:rgba(31,170,94,.20)!important;color:#57e08e!important;
-  border-color:rgba(31,170,94,.40)!important}
-section[data-testid="stSidebar"] [data-testid="stCaptionContainer"]{color:#a7b1ab!important}
+.side-brand .tag{color:#aebab3!important}
+.nav-head,.step{color:#aebab3!important}
+.step .n{background:rgba(31,170,94,.22)!important;color:#5fe996!important;
+  border-color:rgba(31,170,94,.42)!important}
+section[data-testid="stSidebar"] [data-testid="stCaptionContainer"]{color:#b6bfb9!important}
 section[data-testid="stSidebar"] .stButton>button{
   background:transparent!important;border:1px solid transparent!important;
-  color:#cdd6d0!important;justify-content:flex-start!important;text-align:left!important;
+  color:#dde4df!important;justify-content:flex-start!important;text-align:left!important;
   font-size:14px!important;font-weight:600!important;padding:.55rem .8rem!important}
 /* No hover animation on the sidebar (design request): inactive items keep
    their resting look on hover; the active item keeps its green fill on hover. */
 section[data-testid="stSidebar"] .stButton>button:hover{
-  background:transparent!important;color:#cdd6d0!important;
+  background:transparent!important;color:#dde4df!important;
   border-color:transparent!important}
 section[data-testid="stSidebar"] .stButton>button[kind="primary"],
 section[data-testid="stSidebar"] .stButton>button[kind="primary"]:hover{
