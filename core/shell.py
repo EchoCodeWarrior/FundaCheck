@@ -387,7 +387,8 @@ def _doc(body: str, scripts: str = "", extra_css: str = "") -> str:
         'wght@400;500;600;700;800&display=swap" rel="stylesheet">'
         f"<style>{SHELL_CSS}{extra_css}</style></head>"
         "<body>"
-        f'{body}<div id="toast"></div><div id="fctip"></div>'
+        f'<div id="shell"><main>{body}</main></div>'
+        '<div id="toast"></div><div id="fctip"></div>'
         f"<script>{BASE_JS}</script><script>{SHELL_JS}</script>{scripts}"
         "</body></html>"
     )
@@ -601,7 +602,7 @@ def _statements_tables(model, query: str) -> str:
 # ==========================================================================
 # public builders - one per Streamlit page
 # ==========================================================================
-HEIGHTS = {"dashboard": 3400, "ratios": 3900, "sector": 2500, "statements": 1250}
+HEIGHTS = {"dashboard": 2560, "ratios": 3150, "sector": 2050, "statements": 1050}
 
 
 def _topbar(current: str) -> str:

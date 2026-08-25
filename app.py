@@ -284,8 +284,13 @@ def _get_note(model, result, sector_key: str, config: LLMConfig) -> dict:
 
 
 def _render_shell(html: str, height: int) -> None:
-    """One design-exact page, top to bottom, in a single frame."""
-    components.html(html, height=height, scrolling=False)
+    """One design-exact page, top to bottom, in a single frame.
+
+    scrolling=True so a long page (many strengths, big sankey) can never be
+    clipped by the fixed frame height - the inner scrollbar only appears when
+    the content actually outgrows the estimate.
+    """
+    components.html(html, height=height, scrolling=True)
 
 
 def _export_row(model, result) -> None:

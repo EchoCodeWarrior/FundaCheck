@@ -41,7 +41,11 @@ def revenue_trend(model, years: int = 6) -> str:
     Bar height is proportional to the value, so the shape is honest; the colour
     ramp only reinforces recency and carries no separate meaning.
     """
-    sales = pd.to_numeric(model.series("Sales"), errors="coerce").dropna().tail(years)
+    sales = pd.to_numeric(model.series("Sales"), errors="coerce").dropna()
+    # fiscal years only - summary columns like TTM do not belong in the trend
+    sales = sales[[c for c in sales.index
+                   if str(c).upper() not in ("TTM", "TREND", "MEAN", "MEDIAN")]]
+    sales = sales.tail(years)
     if sales.empty:
         return ""
 
