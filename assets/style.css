@@ -701,3 +701,13 @@ section[data-testid="stSidebar"] ~ div .stButton > button[kind="secondary"]:hove
 .val-leg { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px;
            color: var(--muted); font-family: ui-monospace, monospace; }
 .val-leg i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+
+/* v6 - sidebar stays perfectly still on hover (user request) */
+section[data-testid="stSidebar"] .stButton > button,
+section[data-testid="stSidebar"] .stButton > button:hover,
+section[data-testid="stSidebar"] .stToggle,
+section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] {
+  transition: none !important;
+  transform: none !important;
+  animation: none !important;
+}

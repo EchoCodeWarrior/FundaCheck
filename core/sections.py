@@ -267,13 +267,15 @@ def deepdive_charts(model) -> dict[str, tuple[str, int]]:
             "fcMargins", ys_m,
             [("Gross", viz.MID, gm), ("EBITDA", viz.GREEN, em),
              ("EBIT", "#0f3d27", om), ("Net", viz.AMBER, nm)],
-            viz.js_fmt("v=>v.toFixed(1)+'%'"))
+            fmt_js="v=>v.toFixed(1)+'%'",
+            fmt_py=lambda v: f"{v:.0f}%")
     if len(roe) >= 3:
         charts["returns"] = viz.line_chart(
             "fcReturns", ys_r,
             [("ROE", viz.GREEN, roe), ("ROCE", viz.AMBER, roce),
              ("ROA", viz.LIGHT, roa)],
-            viz.js_fmt("v=>v.toFixed(1)+'%'"))
+            fmt_js="v=>v.toFixed(1)+'%'",
+            fmt_py=lambda v: f"{v:.0f}%")
     if len(de) >= 3:
         charts["leverage"] = viz.leverage_chart(ys_l, de, ic)
     if len(dd) >= 3:
@@ -506,12 +508,13 @@ def statements_html(model, tab: str, show_pct: bool, query: str) -> str:
                 if prev not in (None,) and v is not None and prev:
                     ch = (v - prev) / abs(prev) * 100
                     colour = "#2f9e63" if ch >= 0 else "#d0554a"
-                    pct_html = (f'<div style="font-size:13px;padding-top:3px;'
-                                f'font-weight:600;color:{colour};font-family:{MONO}">'
-                                f'{ch:+.1f} %</div>')
+                    pct_html = (f'<div class="pctsub" style="font-size:13px;'
+                                f'padding-top:3px;font-weight:600;color:{colour};'
+                                f'font-family:{MONO}">{ch:+.1f} %</div>')
                 else:
-                    pct_html = ('<div style="font-size:13px;padding-top:3px;'
-                                f'font-weight:600;color:#c8ccc9;font-family:{MONO}">—</div>')
+                    pct_html = ('<div class="pctsub" style="font-size:13px;'
+                                'padding-top:3px;font-weight:600;color:#c8ccc9;'
+                                f'font-family:{MONO}">—</div>')
             val_txt = _fmt_n(v) if v is not None else "—"
             tds += (f'<td style="padding:10px 14px;text-align:right;'
                     f'border-bottom:1px solid #f1f3f1;white-space:nowrap;'
@@ -520,7 +523,9 @@ def statements_html(model, tab: str, show_pct: bool, query: str) -> str:
                     f'color:{INK};letter-spacing:-.2px;font-family:{MONO}">{val_txt}</div>'
                     f'{pct_html}</td>')
             prev = v
-        body += (f'<tr style="background:{bg}">'
+        body += (f'<tr data-name="{escape(name.lower(), quote=True)}"'
+                 + (' class="head"' if head_row else "")
+                 + f' style="background:{bg}">'
                  f'<td style="padding:10px 14px;font-size:15px;'
                  f'font-weight:{700 if head_row else 500};color:{INK if head_row else "#3f4744"};'
                  f'border-bottom:1px solid #f1f3f1;position:sticky;left:0;background:{bg};'

@@ -1,0 +1,878 @@
+"""
+shell.py
+--------
+Renders each page as ONE self-contained HTML document that mirrors the
+FundaCheck reference page exactly: gradient backdrop, floating #fbfbfa shell,
+top bar, hero, KPI grid, verdict card with drivers inside it, tinted
+strengths/risks panels with a working See-all toggle, and every panel in the
+reference order. Python computes all numbers; small vanilla-JS handlers give
+the page its interactions (search filter, statements tabs, % change toggle,
+peer add, See-all).
+
+Chart fragments come from core.viz / core.sections and share one tooltip
+engine inside the shell.
+"""
+
+from __future__ import annotations
+
+import base64
+from html import escape
+
+import pandas as pd
+
+from . import design_blocks as D
+from . import sections as S
+from . import viz
+from .scoring import Assessment
+
+INK = viz.INK
+BODY = viz.BODY
+MUTED = viz.MUTED
+FAINT = viz.FAINT
+GREEN = viz.GREEN
+AMBER_TXT = viz.AMBER_TXT
+GREEN_DARK = "#0f5b34"
+MONO = viz.MONO
+
+
+# ==========================================================================
+# stylesheet - transcribed from the reference page's inline styles
+# ==========================================================================
+SHELL_CSS = """
+*{margin:0;padding:0;box-sizing:border-box}
+body{margin:0;min-height:100vh;padding:24px 20px 34px;
+  background:linear-gradient(180deg,#efefee,#e4e4e3);
+  font-family:'Plus Jakarta Sans',system-ui,sans-serif;color:#15201a;
+  display:flex;justify-content:center}
+#shell{width:1420px;max-width:100%;background:#fbfbfa;border-radius:30px;
+  padding:22px;display:flex;gap:20px;box-shadow:0 30px 80px rgba(0,0,0,.10)}
+main{flex:1;min-width:0;display:flex;flex-direction:column;gap:18px}
+a{color:#177245;text-decoration:none}
+svg{display:block;width:100%;height:auto;overflow:visible}
+text{font-family:'Plus Jakarta Sans',system-ui,sans-serif}
+.mono{font-family:ui-monospace,Menlo,monospace}
+
+/* ---- top bar ---- */
+.topbar{background:#fff;border-radius:20px;padding:14px 18px;display:flex;
+  align-items:center;gap:16px;flex-wrap:wrap}
+.searchpill{flex:1 1 200px;min-width:180px;max-width:330px;display:flex;
+  align-items:center;gap:11px;background:#f5f6f5;border-radius:14px;
+  padding:11px 15px}
+.searchpill input{border:none;background:transparent;outline:none;flex:1;
+  min-width:0;font-size:14.5px;font-family:inherit;color:#15201a}
+.searchpill input::placeholder{color:#9aa09d}
+.searchpill .lens{width:13px;height:13px;border-radius:50%;
+  border:2px solid #9aa09d;flex:none}
+.searchpill .kbd{font-size:11.5px;font-weight:600;color:#8d938f;
+  background:#fff;border-radius:7px;padding:4px 8px}
+.topright{margin-left:auto;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.monitor{width:44px;height:44px;border-radius:50%;background:#f5f6f5;
+  display:flex;align-items:center;justify-content:center}
+.monitor i{width:16px;height:12px;border:2px solid #4a5350;border-radius:3px}
+.aibtn{display:flex;align-items:center;gap:11px;padding:7px 18px 7px 8px;
+  border-radius:30px;cursor:pointer;border:none;
+  background:radial-gradient(130% 130% at 10% 0%,#2a9c62,#0d4a2c)}
+.aibtn .ic{width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.16);
+  display:flex;align-items:center;justify-content:center;font-size:16px;color:#fff}
+.aibtn .t1{font-size:14.5px;font-weight:700;color:#fff;line-height:1.2;text-align:left}
+.aibtn .t2{font-size:10px;letter-spacing:1.2px;color:rgba(255,255,255,.62);
+  font-family:ui-monospace,Menlo,monospace}
+
+/* ---- hero ---- */
+.hero{background:#f4f5f3;border-radius:22px;padding:24px;display:flex;
+  align-items:flex-start;gap:20px;flex-wrap:wrap}
+.hero h1{font-size:38px;font-weight:800;letter-spacing:-1.2px;color:#15201a;
+  line-height:1.1}
+.herosub{display:flex;align-items:center;gap:10px;padding-top:8px;flex-wrap:wrap}
+.ticker{font-family:ui-monospace,Menlo,monospace;font-size:12px;letter-spacing:1px;
+  color:#8b918e}
+.dotsep{color:#cdd2cf}
+.heroright{margin-left:auto;display:flex;align-items:center;gap:12px;
+  flex-wrap:wrap;justify-content:flex-end;flex:1 1 auto;min-width:0}
+.herostat{background:#fff;border-radius:20px;padding:13px 22px;display:flex;
+  align-items:center;gap:16px;flex-wrap:wrap;min-width:0}
+.herostat .lbl{font-family:ui-monospace,Menlo,monospace;font-size:9.5px;
+  letter-spacing:1.3px;color:#a4a9a6}
+.herostat .val{font-size:26px;font-weight:800;letter-spacing:-1px;color:#15201a}
+.herostat .val small{font-size:15px;color:#8b918e}
+.herostat .up{font-size:11.5px;font-weight:700;color:#177245;background:#eef4f0;
+  border-radius:7px;padding:3px 7px}
+.vrule{width:1px;height:38px;background:#eceeec}
+.mcap{font-size:15px;font-weight:700;color:#15201a;padding-top:6px}
+.exportbtn{background:#fff;color:#15201a;border:1.5px solid #177245;
+  border-radius:26px;padding:15px 26px;font-size:14.5px;font-weight:700;
+  cursor:pointer;font-family:inherit}
+
+/* ---- KPI grid ---- */
+.kpigrid{display:grid;grid-template-columns:repeat(auto-fit,
+  minmax(min(220px,100%),1fr));gap:14px}
+.kpi{border-radius:18px;padding:20px 22px;background:#fff}
+.kpi .hd{display:flex;align-items:center;justify-content:space-between}
+.kpi .name{font-size:15px;font-weight:600;color:#15201a}
+.kpi .circ{width:30px;height:30px;border-radius:50%;border:1.5px solid #dcdfdc;
+  display:flex;align-items:center;justify-content:center;font-size:13px;
+  color:#4a5350}
+.kpi.score{color:#fff;background:radial-gradient(130% 130% at 85% 15%,#2a9c62 0%,
+  #177245 45%,#0d4a2c 100%)}
+.kpi.score .circ{border-color:rgba(255,255,255,.5);color:#fff}
+.kpi .big{font-size:44px;font-weight:800;letter-spacing:-1.5px;color:#15201a;
+  padding:14px 0 12px}
+.kpi.score .big{color:#fff}
+.kpi .big small{font-size:20px;font-weight:600;opacity:.7}
+.kpi .ft{display:flex;align-items:center;gap:8px;font-size:12.5px;color:#8b918e}
+.kpi .chip{border-radius:6px;padding:3px 6px;font-weight:700}
+.chip.g{background:#eef4f0;color:#177245}
+.chip.r{background:#fbeeec;color:#b4483c}
+.chip.w{background:#fdf3e2;color:#b5761f}
+.kpi.score .chip{background:rgba(255,255,255,.18);color:#fff}
+
+/* ---- verdict card ---- */
+.verdict{background:#fff;border-radius:18px;padding:24px 26px;
+  border-left:4px solid var(--rail,#d9a441);display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));
+  gap:28px;align-items:center}
+.verdict .chips{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.verdict .vtag{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;
+  font-weight:700;letter-spacing:1.4px;color:#b5761f;background:#fdf3e2;
+  border-radius:20px;padding:7px 13px}
+.verdict .sect{font-family:ui-monospace,Menlo,monospace;font-size:10px;
+  letter-spacing:1.2px;color:#a4a9a6}
+.verdict h2{font-size:29px;font-weight:800;letter-spacing:-.9px;color:#15201a;
+  padding:16px 0 12px}
+.verdict p{font-size:14.5px;line-height:1.65;color:#5f6663;text-wrap:pretty}
+.drivers{display:flex;flex-direction:column;gap:10px}
+.drivers .drow .dl{display:flex;justify-content:space-between;font-size:13px;
+  color:#3f4744;padding-bottom:5px}
+.drivers .drow b{font-weight:700}
+.drivers .track{height:7px;border-radius:7px;background:#f1f3f1}
+.drivers .fill{height:100%;border-radius:7px}
+
+/* ---- strengths / risks ---- */
+.srgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;
+  align-items:start}
+.srpanel{border-radius:18px;padding:20px}
+.srpanel.str{background:#f0f7f3}
+.srpanel.rsk{background:#fcf1ef}
+.srhead{display:flex;align-items:center;justify-content:space-between;
+  padding:0 4px 16px}
+.srhead .t{font-size:17px;font-weight:700;color:#15201a}
+.srhead .cnt{width:28px;height:28px;border-radius:50%;color:#fff;font-size:12.5px;
+  font-weight:700;display:flex;align-items:center;justify-content:center}
+.srlist{display:flex;flex-direction:column;gap:10px}
+.sritem{background:#fff;border-radius:13px;padding:14px 16px}
+.sritem .it{font-size:14.5px;font-weight:700;color:#15201a}
+.sritem .id2{font-size:12.5px;color:#7d847f;line-height:1.5;padding-top:4px}
+.seeall{cursor:pointer;grid-column:1/-1;background:#fff;border:1px solid #e6e9e7;
+  border-radius:14px;padding:14px;text-align:center;font-size:13.5px;
+  font-weight:700;color:#15201a;font-family:inherit}
+
+/* ---- panel cards & grids ---- */
+.card{background:#fff;border-radius:18px;padding:22px 24px}
+.grid-auto{display:grid;grid-template-columns:repeat(auto-fit,
+  minmax(min(280px,100%),1fr));gap:14px;align-items:start}
+.grid-300{display:grid;grid-template-columns:repeat(auto-fit,
+  minmax(min(300px,100%),1fr));gap:14px;align-items:start}
+.grid-440{display:grid;grid-template-columns:repeat(auto-fit,
+  minmax(min(440px,100%),1fr));gap:14px;align-items:start}
+.ct{font-size:17px;font-weight:700;color:#15201a;white-space:nowrap}
+.ct-row{display:flex;align-items:baseline;justify-content:space-between}
+.csub{font-size:12.5px;color:#9aa09d;padding:4px 0 8px}
+.pilltag{font-size:12px;font-weight:700;color:#177245;border:1.5px solid #cfe2d7;
+  border-radius:20px;padding:6px 12px}
+
+/* stat mini-cards (ratio deep dive) */
+.statgrid{display:grid;grid-template-columns:repeat(auto-fit,
+  minmax(min(180px,100%),1fr));gap:14px}
+
+/* ratio page header */
+.pghead{display:flex;align-items:baseline;gap:14px;padding:2px 4px 0;flex-wrap:wrap}
+.pghead .pt{font-size:26px;font-weight:800;letter-spacing:-.7px;color:#15201a}
+.pghead .ps{font-size:13.5px;color:#8b918e}
+.leftstack{flex:1 1 240px;min-width:0;display:flex;flex-direction:column;gap:14px}
+.rightstack{flex:2 1 380px;min-width:0;display:flex;flex-direction:column;gap:14px}
+.rowwrap{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start}
+.strip{background:#fff;border-radius:18px;padding:16px 20px}
+.strip .slabel{font-family:ui-monospace,Menlo,monospace;font-size:10px;
+  font-weight:700;letter-spacing:1.4px;color:#8b918e;padding-bottom:8px}
+.dialcard-hd{text-align:center}
+.dialcard-hd .t{font-size:16px;font-weight:700;color:#15201a}
+.dialcard-hd .s{font-size:12.5px;color:#9aa09d;padding-top:3px}
+
+/* sector lens */
+.why{background:#fff;border-radius:18px;padding:20px 24px;
+  border-left:4px solid #7f7de0}
+.why .wl{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;font-weight:700;
+  letter-spacing:1.4px;color:#6f6dd0;padding-bottom:10px}
+.why p{font-size:14.5px;line-height:1.65;color:#5f6663}
+.healthrow{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.healthrow .htxt{flex:1;min-width:120px}
+.healthrow .htxt .t{font-size:16px;font-weight:700;color:#15201a}
+.healthrow .htxt .s{font-size:12.5px;color:#9aa09d;padding-top:4px}
+.legendcol{display:flex;flex-direction:column;gap:9px;flex:1 1 240px;min-width:200px}
+.legrow{display:flex;align-items:center;gap:8px}
+.legrow i{width:11px;height:11px;border-radius:50%;flex:none}
+.legrow span{font-size:12.5px;color:#5f6663}
+
+/* statements */
+.stmttabs{display:flex;align-items:center;gap:6px;padding-bottom:16px;flex-wrap:wrap}
+.stmttab{cursor:pointer;padding:9px 16px;border-radius:11px;font-size:13px;
+  font-weight:700;background:#f4f5f3;color:#5f6663;font-family:inherit;border:none}
+.stmttab.on{background:#177245;color:#fff}
+.pcttoggle{cursor:pointer;display:flex;align-items:center;gap:9px;user-select:none}
+.pctbox{width:17px;height:17px;border-radius:5px;background:#177245;border:2px solid
+  #177245;display:flex;align-items:center;justify-content:center;color:#fff;
+  font-size:11px;font-weight:800}
+.pctbox.off{background:#fff}
+.pctlbl{font-size:13px;color:#3f4744}
+.stmtfoot{display:flex;align-items:center;gap:12px;padding-top:14px;flex-wrap:wrap}
+.stmtfoot .note{margin-left:auto;font-size:12px;color:#9aa09d}
+table.stmt{width:100%;border-collapse:collapse}
+table.stmt th{padding:10px 12px;font-size:11.5px;letter-spacing:.8px;color:#8b918e;
+  font-weight:700;text-align:right;border-bottom:1px solid #eceeec;
+  font-family:ui-monospace,Menlo,monospace}
+table.stmt th:first-child{text-align:left;position:sticky;left:0;background:#fafbfa;
+  min-width:200px;font-size:14px;letter-spacing:0;color:#15201a}
+table.stmt td{padding:10px 14px;text-align:right;border-bottom:1px solid #f1f3f1;
+  white-space:nowrap;cursor:default}
+table.stmt td:first-child{text-align:left;position:sticky;left:0;white-space:nowrap;
+  font-size:15px;font-weight:500;color:#3f4744}
+table.stmt tr.head td{font-weight:700;color:#15201a;background:#f5f9f7}
+.val{font-size:17px;font-weight:600;color:#15201a;letter-spacing:-.2px;
+  font-family:ui-monospace,Menlo,monospace}
+tr.head .val{font-weight:800}
+.pctsub{font-size:13px;padding-top:3px;font-weight:600;
+  font-family:ui-monospace,Menlo,monospace}
+.tblwrap{overflow:auto;border:1px solid #eceeec;border-radius:12px}
+
+/* peers */
+.peerlist{display:flex;flex-direction:column;gap:13px}
+.peerrow{display:flex;align-items:center;gap:13px}
+.peerav{width:34px;height:34px;border-radius:11px;flex:none}
+.peermain{flex:1;min-width:0}
+.peername{font-size:14.5px;font-weight:600;color:#15201a}
+.peersub{font-size:12px;color:#9aa09d}
+.peersub b{color:#15201a;font-weight:600}
+.peertag{font-size:11.5px;font-weight:700;border-radius:8px;padding:5px 10px;
+  white-space:nowrap;flex:none}
+.ptag.g{color:#177245;background:#eef4f0}
+.ptag.w{color:#8a7a2e;background:#f8f4e3}
+.ptag.r{color:#a4483f;background:#faeeec}
+.addpeer{display:flex;gap:8px;flex-wrap:wrap;padding-top:12px;
+  border-top:1px dashed #eceeec;margin-top:12px}
+.addpeer input{border:1px solid #e4e7e5;border-radius:9px;padding:7px 10px;
+  font-family:inherit;font-size:12.5px;width:110px}
+.addpeer button{background:#f4f5f3;border:1px solid #e4e7e5;border-radius:9px;
+  padding:7px 12px;font-family:inherit;font-weight:700;font-size:12.5px;
+  color:#15201a;cursor:pointer}
+
+/* toast + tooltip */
+#toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);
+  background:#0f2a1e;color:#fff;font-size:12.5px;padding:9px 16px;
+  border-radius:10px;opacity:0;pointer-events:none;transition:opacity .25s;z-index:99}
+#fctip{position:fixed;display:none;pointer-events:none;background:#0f2a1e;
+  opacity:.97;border-radius:8px;padding:8px 10px;z-index:60;min-width:96px;
+  font-size:10.5px;line-height:15px;color:#cfe0d7;white-space:nowrap;
+  box-shadow:0 6px 18px rgba(0,0,0,.25)}
+#fctip b{color:#fff;font-weight:700}
+#fctip .yr{font-size:11px;font-weight:700;margin-bottom:4px}
+#fctip span{display:flex;align-items:center;gap:6px}
+#fctip i{width:7px;height:7px;border-radius:50%;flex:none}
+#fctip .v{margin-left:auto;padding-left:12px;color:#fff;font-weight:700;
+  font-family:ui-monospace,Menlo,monospace}
+.hit{cursor:crosshair}
+"""
+
+BASE_JS = """
+const tip=document.getElementById('fctip');
+function fcShow(x,y,html){tip.innerHTML=html;tip.style.display='block';
+  let px=x+14;if(px+tip.offsetWidth>window.innerWidth-8)px=x-tip.offsetWidth-14;
+  tip.style.left=Math.max(4,px)+'px';
+  tip.style.top=Math.max(4,Math.min(y-tip.offsetHeight/2,
+    window.innerHeight-tip.offsetHeight-4))+'px';}
+function fcHide(){tip.style.display='none';}
+document.querySelectorAll('[data-tt]').forEach(el=>{
+  el.addEventListener('mousemove',e=>{
+    fcShow(e.clientX,e.clientY,el.getAttribute('data-tt'));});
+  el.addEventListener('mouseleave',fcHide);});
+function fcColumns(cid,Y,L,fmt){
+  const svg=document.getElementById(cid);
+  if(!svg)return;
+  const cols=svg.querySelectorAll('.hit'), xl=svg.querySelectorAll('.xline');
+  cols.forEach((el,i)=>{
+    el.addEventListener('mousemove',e=>{
+      const rows=L.map(l=>'<span><i style="background:'+l[1]+'"></i>'+l[0]+
+        '<span class="v">'+fmt(l[2][i])+'</span></span>').join('');
+      fcShow(e.clientX,e.clientY,'<div class="yr">'+Y[i]+'</div>'+rows);
+      xl.forEach(x=>x.style.display='none');if(xl[i])xl[i].style.display='block';});
+    el.addEventListener('mouseleave',()=>{fcHide();
+      xl.forEach(x=>x.style.display='none');});});
+}
+function toast(msg){const t=document.getElementById('toast');
+  t.textContent=msg;t.style.opacity=1;
+  clearTimeout(t._h);t._h=setTimeout(()=>t.style.opacity=0,1800);}
+"""
+
+SHELL_JS = """
+// statements tabs
+document.querySelectorAll('.stmttab').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('.stmttab').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on');
+  document.querySelectorAll('.stmttable').forEach(t=>
+    t.style.display=t.id==='tbl-'+b.dataset.tab?'block':'none');}));
+// % change toggle
+const pb=document.getElementById('pctbox');
+if(pb)pb.addEventListener('click',()=>{
+  pb.classList.toggle('off');
+  const on=!pb.classList.contains('off');
+  pb.textContent=on?'\\u2713':'';
+  document.querySelectorAll('.pctsub').forEach(e=>
+    e.style.display=on?'block':'none');});
+// search filters statement rows + peer names
+const sq=document.getElementById('fcsearch');
+if(sq)sq.addEventListener('input',()=>{
+  const q=sq.value.trim().toLowerCase();
+  document.querySelectorAll('.stmt tr[data-name]').forEach(tr=>{
+    tr.style.display=!q||tr.dataset.name.includes(q)?'':'none';});});
+// see all toggle
+const sa=document.getElementById('seeall');
+if(sa)sa.addEventListener('click',()=>{
+  const open=sa.dataset.open!=='1';
+  sa.dataset.open=open?'1':'0';
+  sa.textContent=open?'Show fewer':'See all';
+  document.querySelectorAll('.moreitem').forEach(e=>
+    e.style.display=open?'':'none');
+  const n=open?sa.dataset.total:'3';
+  document.querySelectorAll('.cnt').forEach(c=>c.textContent=n);});
+// peer add
+const pa=document.getElementById('peeraddbtn');
+if(pa)pa.addEventListener('click',()=>{
+  const nm=document.getElementById('p-name').value.trim();
+  if(!nm){toast('Enter a company name');return;}
+  const pe=parseFloat(document.getElementById('p-pe').value);
+  const roe=parseFloat(document.getElementById('p-roe').value);
+  const de=parseFloat(document.getElementById('p-de').value);
+  const av=['#e8f1ec','#f2f0e6','#f0eaf2','#f6ebe6'][
+    document.querySelectorAll('.peerrow').length%4];
+  let sub='ROE '+(isFinite(roe)?'<b>'+roe.toFixed(1)+'%</b>':'n/a');
+  if(isFinite(de))sub+=' · D/E '+de.toFixed(2);
+  let tag;
+  if(!(pe>0))tag='<span class="peertag r">Loss</span>';
+  else{const cls=pe>=45?'r':pe>=32?'w':'g';
+    tag='<span class="peertag '+cls+'">P/E '+pe.toFixed(1)+'</span>';}
+  const div=document.createElement('div');
+  div.className='peerrow';
+  div.setAttribute('data-name',nm.toLowerCase());
+  div.innerHTML='<div class="peerav" style="background:'+av+'"></div>'+
+    '<div class="peermain"><div class="peername"></div>'+
+    '<div class="peersub">'+sub+'</div></div>'+tag;
+  div.querySelector('.peername').textContent=nm;
+  const list=document.querySelector('.peerlist');
+  list.appendChild(div);
+  ['p-name','p-pe','p-roe','p-de'].forEach(id=>
+    document.getElementById(id).value='');
+  toast(nm+' added to comparison');});
+"""
+
+
+def _esc(s) -> str:
+    return escape(str(s))
+
+
+def _doc(body: str, scripts: str = "", extra_css: str = "") -> str:
+    """Full standalone doc: fonts, shell css, body, shared JS, chart scripts."""
+    return (
+        '<!DOCTYPE html><html><head><meta charset="utf-8">'
+        '<link rel="preconnect" href="https://fonts.googleapis.com">'
+        '<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:'
+        'wght@400;500;600;700;800&display=swap" rel="stylesheet">'
+        f"<style>{SHELL_CSS}{extra_css}</style></head>"
+        "<body>"
+        f'{body}<div id="toast"></div><div id="fctip"></div>'
+        f"<script>{BASE_JS}</script><script>{SHELL_JS}</script>{scripts}"
+        "</body></html>"
+    )
+
+
+def _kpi_cards(model, result) -> list[str]:
+    def pct(*names):
+        s = S.pct_series(S.ser(model, *names))
+        return float(s.iloc[-1]) if not s.empty else None
+
+    circ = '<div class="circ">&#8599;</div>'
+    pe = S.ser(model, "PE Ratio")
+    pe = pe[(pe > 0) & (pe < 1000)]
+    pe_big, pe_ft = "n/a", "not in this workbook"
+    if not pe.empty:
+        latest, med = float(pe.iloc[-1]), float(pe.median())
+        cheaper = latest < med
+        pe_big = f"{latest:.1f}"
+        pe_ft = (f'<span class="chip g">\u25bc</span>10-yr median {med:.1f}' if cheaper
+                 else f'<span class="chip w">\u25b2</span>10-yr median {med:.1f}')
+    roe = pct("Return on Equity (ROE) %")
+    roe_s = S.ser(model, "Return on Equity (ROE) %")
+    roe_big, roe_ft = "n/a", "not in this workbook"
+    if not roe_s.empty:
+        latest = float(S.pct_series(roe_s).iloc[-1])
+        prev = float(roe_s.iloc[-2]) * (100 if abs(float(roe_s.iloc[-2])) <= 3 else 1) \
+            if len(roe_s) > 1 else None
+        prev_txt = f"{prev:.1f}%" if prev is not None else ""
+        delta = latest - prev if prev is not None else 0
+        chip = (f'<span class="chip g">{delta:+.1f} \u25b2</span>'
+                if delta >= 0 else f'<span class="chip r">{delta:+.1f} \u25bc</span>')
+        roe_big = f"{latest:.1f}%"
+        roe_ft = f"{chip}{prev_txt} was previous year" if prev is not None \
+            else "single-year history"
+    de_s = S.ser(model, "Debt to Equity Ratio")
+    de_big = f"{float(de_s.iloc[-1]):.2f}" if not de_s.empty else "n/a"
+    scored = result.metric("Debt to Equity Ratio")
+    if scored is None:
+        de_ft = "no sector benchmark for this workbook"
+    elif scored.score >= 66:
+        de_ft = "Comfortably within sector norms"
+    elif scored.score >= 40:
+        de_ft = "Within sector norms, cover is thin"
+    else:
+        de_ft = "Above the sector comfort zone"
+
+    score_card = (
+        f'<div class="kpi score"><div class="hd"><span class="name">Funda Score</span>'
+        f"{circ}</div>"
+        f'<div class="big">{result.total_score:.0f}<small>/100</small></div>'
+        f'<div class="ft"><span class="chip">{result.verdict}</span>sector adjusted'
+        f"</div></div>")
+    mk = lambda name, big, ft: (
+        f'<div class="kpi"><div class="hd"><span class="name">{name}</span>{circ}</div>'
+        f'<div class="big">{big}</div><div class="ft">{ft}</div></div>')
+    return [score_card, mk("P/E Ratio", pe_big, pe_ft),
+            mk("Return on Equity", roe_big, roe_ft),
+            mk("Debt / Equity", de_big, de_ft)]
+
+
+def _drivers_html(result) -> str:
+    ranked = sorted(result.metrics, key=lambda m: m.score, reverse=True)[:6]
+    rows = "".join(
+        f'<div class="drow"><div class="dl"><span>{_esc(S.short_name(m.metric))}'
+        f'</span><b style="color:{viz.band(m.score)}">{round(m.score)}</b></div>'
+        f'<div class="track"><div class="fill" '
+        f'style="width:{m.score:.0f}%;background:{viz.band(m.score)}"></div></div></div>'
+        for m in ranked)
+    return f'<div class="drivers">{rows}</div>'
+
+
+def _split_note(text: str) -> tuple[str, str]:
+    for sep in (" \u2014 ", " \u2013 ", ": "):
+        if sep in text:
+            head, _, tail = text.partition(sep)
+            return head.strip(), tail.strip()
+    cut = text.find(". ")
+    if 30 < cut < 110:
+        return text[:cut].strip(), text[cut + 1:].strip()
+    return text.strip(), ""
+
+
+def _strengths_risks(note: dict, result) -> str:
+    strengths = list(note.get("strengths") or result.strengths)
+    risks = list(note.get("risks") or result.concerns)
+
+    def panel(title, items, kind, colour):
+        shown = items[:3]
+        extras = items[3:]
+        blocks = "".join(
+            f'<div class="sritem"><div class="it">{_esc(t)}</div>'
+            f'<div class="id2">{_esc(d)}</div></div>'
+            for t, d in (_split_note(str(i)) for i in shown))
+        blocks += "".join(
+            f'<div class="sritem moreitem" style="display:none">'
+            f'<div class="it">{_esc(t)}</div><div class="id2">{_esc(d)}</div></div>'
+            for t, d in (_split_note(str(i)) for i in extras))
+        return (f'<div class="srpanel {kind}"><div class="srhead">'
+                f'<span class="t">{title}</span>'
+                f'<span class="cnt" style="background:{colour}">'
+                f'{len(items[:3]) if items else 0}</span></div>'
+                f'<div class="srlist">{blocks}</div></div>')
+
+    total = max(len(strengths), len(risks), 3)
+    see_all = ""
+    if len(strengths) > 3 or len(risks) > 3:
+        see_all = ('<div class="seeall" id="seeall" data-open="0" '
+                   f'data-total="{total}">See all</div>')
+    return ('<div class="srgrid">' +
+            panel("Ratio Strengths", strengths, "str", "#177245") +
+            panel("Ratio Risks", risks, "rsk", "#a4483f") + see_all + "</div>")
+
+
+def _valuation(model) -> str:
+    segs = []
+    mcap = model.meta.get("market_cap")
+    sales_v = S.last_two(S.ser(model, "Sales"))[0]
+    net_v = S.last_two(S.ser(model, "Net Profit"))[0]
+    if mcap and sales_v and net_v:
+        segs = [("Market Cap", mcap, "#9aa09d"), ("Revenue", sales_v, "#177245"),
+                ("Net income", net_v, "#5fd0a0")]
+    multiples = []
+    for label, metric in (("Price to earnings (P/E)", "PE Ratio"),
+                          ("Price to sales (P/S)", "Price to Sales")):
+        s = S.ser(model, metric)
+        s = s[(s > 0) & (s < 1000)]
+        if not s.empty:
+            multiples.append((label, f"{float(s.iloc[-1]):.2f}x"))
+    donut = ""
+    if segs:
+        centre = S.cr(mcap)
+        donut, _ = viz.donut(segs, centre.replace("\u20b9", "\u20b9"), "crore mcap")
+    mult_rows = "".join(
+        f'<div style="display:flex;align-items:center;justify-content:space-between;'
+        f'gap:10px"><span style="font-size:12.5px;color:{BODY}">{k}</span>'
+        f'<b style="font-size:14px;color:{INK};flex:none">{v}</b></div>'
+        for k, v in multiples)
+    if not donut and not mult_rows:
+        return '<p class="csub">Multiples not present in this workbook.</p>'
+    return (donut + (f'<div style="display:flex;flex-direction:column;gap:10px;'
+            f'padding-top:10px">{mult_rows}</div>' if mult_rows else ""))
+
+
+def _key_ratios(model) -> str:
+    return _kr_fallback(model)
+
+
+def _kr_fallback(model) -> str:
+    rows = [("Gross Margin", "Profitability", ("Gross Margin",), True),
+            ("ROCE", "Efficiency", ("Return on Capital Employed (ROCE) %",), True),
+            ("Interest Coverage", "Solvency", ("Interest Coverage Ratio",), False),
+            ("EBITDA Margin", "Operating", ("EBITDA Margin",), True),
+            ("Cash Cycle", "Working capital", ("Cash Conversion Cycle",), False)]
+    out = []
+    for label, fam, names, is_pct in rows:
+        s = S.ser(model, *names)
+        if s.empty:
+            continue
+        v = float(S.pct_series(s).iloc[-1]) if is_pct else float(s.iloc[-1])
+        txt = f"{v:.1f}%" if is_pct else f"{v:.1f}x" if not is_pct and "Coverage" in label \
+            else f"{v:.0f} d"
+        out.append(f'<div style="display:flex;align-items:center;'
+                   f'justify-content:space-between;gap:10px"><div style="min-width:0">'
+                   f'<div style="font-size:14px;font-weight:600;color:{INK}">{label}</div>'
+                   f'<div style="font-size:11.5px;color:{FAINT}">{fam}</div></div>'
+                   f'<span style="font-size:15px;font-weight:700;color:{INK};'
+                   f'flex:none;font-family:{MONO}">{txt}</span></div>')
+    return (f'<div style="display:flex;flex-direction:column;gap:11px">'
+            + "".join(out) + "</div>")
+
+
+def _peers(peers: list[dict]) -> str:
+    av = ["#e8f1ec", "#f2f0e6", "#f0eaf2", "#f6ebe6"]
+    rows = []
+    for i, p in enumerate(peers or []):
+        pe, roe, de = p.get("pe"), p.get("roe"), p.get("de")
+        sub = f'ROE <b>{roe:.1f}%</b>' if roe is not None else "ROE n/a"
+        sub += f" · D/E {de:.2f}" if de is not None else ""
+        if pe is not None and pe > 0:
+            cls = "r" if pe >= 45 else "w" if pe >= 32 else "g"
+            tag = f'<span class="peertag {cls}">P/E {pe:.1f}</span>'
+        else:
+            tag = '<span class="peertag r">Loss</span>'
+        rows.append(f'<div class="peerrow" data-name="{_esc(p["name"]).lower()}">'
+                    f'<div class="peerav" style="background:{av[i % 4]}"></div>'
+                    f'<div class="peermain"><div class="peername">'
+                    f'{_esc(p["name"])}</div><div class="peersub">{sub}</div></div>'
+                    f"{tag}</div>")
+    empty = ("<p class='csub'>No peers yet - add companies to compare them "
+             "side by side.</p>") if not rows else ""
+    form = ('<div class="addpeer">'
+            '<input id="p-name" placeholder="Company">'
+            '<input id="p-pe" type="number" step="0.1" placeholder="P/E">'
+            '<input id="p-roe" type="number" step="0.1" placeholder="ROE %">'
+            '<input id="p-de" type="number" step="0.05" placeholder="D/E">'
+            '<button id="peeraddbtn" type="button">Add peer</button></div>')
+    return (f'<div class="peerlist">{"".join(rows)}</div>{empty}{form}')
+
+
+def _statements_tables(model, query: str) -> str:
+    tables = []
+    for tab_key, label in (("is", "Income Statement"), ("ra", "Ratio Analysis"),
+                           ("cs", "Common Size")):
+        html = S.statements_html(model, label, True, query)
+        disp = "block" if tab_key == "is" else "none"
+        tables.append(f'<div class="stmttable" id="tbl-{tab_key}" '
+                      f'style="display:{disp}">{html}</div>')
+    return "".join(tables)
+
+
+# ==========================================================================
+# public builders - one per Streamlit page
+# ==========================================================================
+HEIGHTS = {"dashboard": 3400, "ratios": 3900, "sector": 2500, "statements": 1250}
+
+
+def _topbar(current: str) -> str:
+    pills = "".join(
+        f'<button class="stmttab {"on" if key == current else ""}" '
+        f'data-goto="{key}" '
+        f'onclick="if(this.dataset.goto!==\'{current}\')toast(\'Switch pages from '
+        f'the left menu\')">{label}</button>'
+        for key, label in (("dashboard", "Dashboard"),
+                           ("ratios", "Ratio deep dive"),
+                           ("sector", "Sector lens"),
+                           ("statements", "Statements")))
+    return (f'<div class="topbar"><div class="searchpill"><span class="lens"></span>'
+            f'<input id="fcsearch" placeholder="Search company or ticker">'
+            f'<span class="kbd">\u2318 K</span></div>'
+            f'<div class="topright">{pills}'
+            f'<div class="monitor"><i></i></div>'
+            f'<button class="aibtn" onclick="toast(\'Use the left menu - Ask the '
+            f'analyst\')"><span class="ic">\u2726</span><span><span class="t1">'
+            f'Ask Analyst AI</span><br><span class="t2">SECTOR AWARE</span></span>'
+            f"</button></div></div>")
+
+
+def _hero(model, result) -> str:
+    price = model.meta.get("current_price")
+    mcap = model.meta.get("market_cap")
+    price_html = ""
+    if price:
+        whole, _, frac = f"{price:,.2f}".partition(".")
+        price_html = ('<div><div class="lbl">LAST TRADED PRICE</div>'
+                      f'<div style="display:flex;align-items:baseline;gap:9px;'
+                      f'padding-top:5px"><span class="val">\u20b9{whole}<small>.{frac}'
+                      f"</small></span></div></div>")
+    mcap_html = ""
+    if mcap:
+        pretty = (f"\u20b9{mcap / 1e5:.2f}L cr" if mcap >= 1e5
+                  else f"\u20b9{mcap:,.0f} cr")
+        rule = '<div class="vrule"></div>' if price else ""
+        mcap_html = f'{rule}<div><div class="lbl">MKT CAP</div>'\
+                    f'<div class="mcap">{pretty}</div></div>'
+    stats = (f'<div class="herostat">{price_html}{mcap_html}</div>') \
+        if (price or mcap) else ""
+
+    years = S.full_years(model)
+    sub = (f'<span class="ticker">{_esc(result.sector.name.upper())}</span>'
+           f'<span class="dotsep">\u00b7</span>'
+           f'<span class="ticker">{years[0]}\u2013{years[-1]}</span>'
+           f'<span class="dotsep">\u00b7</span>'
+           f'<span class="ticker">{len(years)} PERIODS</span>')
+
+    pdf64 = ""
+    try:
+        from .report import build_pdf
+        pdf64 = base64.b64encode(build_pdf(model, result)).decode()
+    except Exception:                                    # noqa: BLE001
+        pass
+    if pdf64:
+        export = (f'<a class="exportbtn" download="{_esc(model.company)}'
+                  f'_fundacheck_report.pdf" '
+                  f'href="data:application/pdf;base64,{pdf64}">Export Report</a>')
+    else:
+        export = ('<span class="exportbtn" onclick="toast(\'Export unavailable for '
+                  'this model\')" style="cursor:pointer">Export Report</span>')
+
+    return (f'<div class="hero"><div><h1>{_esc(model.company.title())}</h1>'
+            f'<div class="herosub">{sub}</div></div>'
+            f'<div class="heroright">{stats}{export}</div></div>')
+
+
+def dashboard_shell(model, result, note: dict, peers: list[dict]) -> tuple[str, int]:
+    emoji = {"STRONG": "\U0001F603", "NEUTRAL": "\U0001F610"}.get(
+        result.verdict, "\U0001F615")
+    rail = result.colour if isinstance(result.colour, str) and \
+        result.colour.startswith("#") else "#d9a441"
+
+    summary = note.get("summary") or ""
+    chips = (f'<div class="chips"><span class="vtag" style="color:'
+             f'{result.colour};background:{result.colour}18;border:1px solid '
+             f'{result.colour}55">{result.verdict}</span>'
+             f'<span class="sect">SECTOR AWARE · '
+             f'{_esc(result.sector.name.upper())}</span></div>')
+
+    rev_html = D.revenue_trend(model)
+    sankey_title, sankey_svg = D.income_sankey(model)
+
+    body = "".join([
+        _topbar("dashboard"),
+        _hero(model, result),
+        f'<div class="kpigrid">{"".join(_kpi_cards(model, result))}</div>',
+        (f'<div class="verdict" style="--rail:{rail}">'
+         f'<div>{chips}<h2>{_esc(result.headline)} {emoji}</h2>'
+         f"<p>{_esc(summary)}</p></div>{_drivers_html(result)}</div>"),
+        _strengths_risks(note, result),
+        '<div class="grid-auto">'
+        f'<div class="card"><div class="ct-row"><span class="ct">Revenue Trend'
+        f"</span><span class=\"csub\" style=\"padding:0\">\u20b9 crore</span></div>"
+        f"{rev_html}</div>",
+        f'<div class="card"><div class="ct-row"><span class="ct">Valuation</span>'
+        f'<span style="font-size:15px;color:#9aa09d">\u203a</span></div>'
+        f'<div class="csub">Fundamental metrics to determine fair value</div>'
+        f"{_valuation(model)}</div>",
+        '<div class="card"><div class="ct-row"><span class="ct">Key Ratios</span>'
+        '<span class="pilltag">All</span></div>' + _key_ratios(model) + "</div>",
+        "</div>",
+        '<div class="grid-300">'
+        '<div class="card"><div class="ct-row" style="padding-bottom:16px">'
+        '<span class="ct">Peer Comparison</span><span class="pilltag">+ Add Peer'
+        "</span></div>" + _peers(peers) + "</div>",
+        '<div class="card" style="display:flex;flex-direction:column;align-items:'
+        'center"><div style="align-self:flex-start" class="ct">Financial Health'
+        "</div>" + viz.gauge(float(result.total_score),
+                             f"{result.total_score:.0f}%")[0]
+        + '<div style="display:flex;align-items:center;justify-content:center;gap:16px;'
+          'flex-wrap:wrap;padding-top:12px">'
+        + _gauge_inline_legend() + "</div></div></div>",
+    ])
+    if sankey_svg:
+        body += (f'<div class="card"><div class="ct">{_esc(sankey_title)}</div>'
+                 f'<div class="csub">Income statement flow, \u20b9 crore</div>'
+                 f"{sankey_svg}</div>")
+    return _doc(body, ""), HEIGHTS["dashboard"]
+
+
+def _gauge_inline_legend() -> str:
+    risk_bg = "repeating-linear-gradient(-45deg,#d9dcd9 0 3px,#f2f3f1 3px 6px)"
+    item = lambda c, t: (f'<div style="display:flex;align-items:center;gap:7px">'
+                         f'<div style="width:11px;height:11px;border-radius:50%;'
+                         f'background:{c}"></div>'
+                         f'<span style="font-size:12.5px;color:#5f6663">{t}</span></div>')
+    return item(viz.MID, "Strong") + item(GREEN_DARK, "Stable") + item(risk_bg, "Risk")
+
+
+def ratios_shell(model, result) -> tuple[str, int]:
+    years = S.full_years(model)
+    latest_year = years[-1] if years else model.latest_year
+
+    def pct_val(*names):
+        s = S.pct_series(S.ser(model, *names))
+        return float(s.iloc[-1]) if not s.empty else None
+
+    npg, rev_g = pct_val("Net Profit Growth"), pct_val("Sales Growth")
+    np_v = S.last_two(S.ser(model, "Net Profit"))
+    rev_v = S.last_two(S.ser(model, "Sales"))
+    other_v = S.last_two(S.ser(model, "Other Income"))
+    ebit_v = S.last_two(S.ser(model, "EBIT (OPM)", "EBIT (Operating Profit)", "EBITDA"))
+
+    def growth_card(growth, big_vals, label, tone_hi):
+        if growth is None or not big_vals[0]:
+            return ""
+        arrow = "\u25b2" if growth >= 0 else "\u25bc"
+        tone = "good" if growth >= tone_hi else ("warn" if growth >= 0 else "bad")
+        prev_lab = f"{years[-2]} cr" if len(years) > 1 else "previous"
+        return S.stat_card(arrow, tone, f"{growth:.1f}%", label,
+                           S.cr(big_vals[0]), f"{latest_year} cr",
+                           S.cr(big_vals[1]) or "n/a", prev_lab)
+
+    card_np = growth_card(npg, np_v, "Net profit growth", 18)
+    card_rev = growth_card(rev_g, rev_v, "Revenue growth", 10)
+    card_other = ""
+    if other_v[0]:
+        note_tone = AMBER_TXT if ebit_v[0] and other_v[0] > ebit_v[0] else GREEN
+        note_txt = (f"above EBIT of {S.cr(ebit_v[0])}"
+                    if ebit_v[0] and other_v[0] > ebit_v[0]
+                    else "within operating income")
+        card_other = ('<div class="statgrid">'
+                      + S.simple_card(f"Other income, {latest_year}",
+                                      S.cr(other_v[0]), note_txt, note_tone)
+                      + "</div>")
+    dials_html, dials_h = S.dials_row(model)
+    cost_html, cost_h = S.cost_card(model)
+    rows = [(S.short_name(m.metric), m.display(m.latest), float(m.score))
+            for m in result.metrics]
+    sc_html, sc_h = viz.scorecard_chart(rows)
+    charts = S.deepdive_charts(model)
+
+    titles = {
+        "margins": ("Margin ladder", "Gross \u2192 EBITDA \u2192 EBIT \u2192 Net"),
+        "returns": ("Returns", "ROE \u00b7 ROCE \u00b7 ROA"),
+        "leverage": ("Leverage & solvency", "Debt/equity bars \u00b7 interest cover line"),
+        "wc": ("Working capital cycle", "Debtor + inventory \u2212 payable days"),
+        "cash": ("Cash flow mix", "Operating \u00b7 investing \u00b7 financing, \u20b9 cr"),
+        "turnover": ("Turnover & efficiency", "Times per year, latest vs 10-yr mean"),
+        "assets": ("Total assets, by component", "Stacked, \u20b9 crore"),
+        "liab": ("Total liabilities & equity", "Stacked, \u20b9 crore"),
+    }
+    chart_cards = "".join(
+        f'<div class="card"><div class="ct">{t}</div><div class="csub">{s2}</div>'
+        f"{html}</div>"
+        for key, (t, s2) in titles.items() if key in charts
+        for html, _h in [charts[key]])
+
+    body = "".join([
+        _topbar("ratios"),
+        '<div class="pghead"><span class="pt">Ratio deep dive</span>'
+        '<span class="ps">All nine categories from the Ratio Analysis sheet.</span>'
+        "</div>",
+        '<div class="rowwrap"><div class="leftstack">',
+        f'<div class="statgrid">{card_np}</div>' if card_np else "",
+        card_other,
+        f'<div class="statgrid">{card_rev}</div>' if card_rev else "",
+        f'<div style="width:min(350px,100%)">{S.roce_card(model, result)}</div>',
+        "</div>",
+        '<div class="rightstack">',
+        f'<div class="card"><div class="dialcard-hd"><div class="t">Overall profit '
+        f'margin</div><div class="s">Latest year, dial scaled 0\u201330%</div></div>'
+        f"{dials_html}</div>",
+        f'<div class="card"><div class="ct">Where each \u20b9100 of sales goes</div>'
+        f'<div class="csub">Latest-year cost structure</div>{cost_html}</div>',
+        "</div></div>",
+        f'<div class="strip"><div class="slabel">RATIO SCORECARD \u2014 SCORED '
+        f'AGAINST SECTOR BANDS</div>{sc_html}</div>',
+        f'<div class="grid-440">{chart_cards}</div>',
+    ])
+    est = 1500 + sum(charts[k][1] + 90 for k in charts) // 2 + 400
+    return _doc(body, ""), max(HEIGHTS["ratios"], est)
+
+
+def sector_shell(model, result) -> tuple[str, int]:
+    sectors, hot_name = S.sector_scores(model, result)
+    bars_html, bars_h = viz.sector_bars(sectors, hot_name)
+    gauge_html, _gh = viz.gauge(float(result.total_score),
+                                f"{result.total_score:.0f}%")
+    hm_html, hm_h = S.heatmap_block(model)
+    legend_rows = [
+        (viz.MID, "Strong \u2014 margins, cash cycle, profit growth"),
+        (GREEN_DARK, "Stable \u2014 leverage within sector norms"),
+        ("repeating-linear-gradient(-45deg,#d9dcd9 0 3px,#f2f3f1 3px 6px)",
+         "Risk \u2014 interest cover, ROCE, cash conversion"),
+    ]
+    legend = "".join(
+        f'<div class="legrow"><i style="background:{c}"></i><span>{t}</span></div>'
+        for c, t in legend_rows)
+
+    body = "".join([
+        _topbar("sector"),
+        '<div class="pghead"><span class="pt">Sector lens</span>'
+        '<span class="ps">One set of numbers, nine rule books.</span></div>',
+        S.why_card(),
+        f'<div class="card"><div class="slabel" style="padding-bottom:14px">'
+        f'SAME NUMBERS, EVERY SECTOR RULE BOOK</div>{bars_html}</div>',
+        '<div class="grid-300"><div style="display:flex;flex-direction:column;gap:14px;'
+        'min-width:0">',
+        '<div class="card healthrow"><div class="htxt">'
+        '<div class="t">Financial health</div><div class="s">Composite index under '
+        "this lens</div></div>"
+        f'<div style="position:relative;width:190px;flex:none">{gauge_html}</div>'
+        f'<div class="legendcol">{legend}</div></div>',
+        f'<div class="card"><div class="ct">How the ratios move together</div>'
+        f'<div class="csub">Pairwise correlation across history</div>{hm_html}</div>'
+        "</div>",
+        '<div class="card" style="min-width:0"><div class="ct">Applied benchmarks'
+        f"</div><div class=\"csub\">{_esc(result.sector.name)}</div>"
+        f"{S.bench_table(result)}</div></div>",
+    ])
+    return _doc(body, ""), max(HEIGHTS["sector"], 900 + hm_h + bars_h)
+
+
+def statements_shell(model, query: str = "") -> tuple[str, int]:
+    n_rows = len(S.stmt_source(model, "Income Statement", ))
+    tables = _statements_tables(model, query)
+    height = 320 + min(max(n_rows, 6), 40) * 46
+    body = "".join([
+        _topbar("statements"),
+        '<div class="card"><div class="stmttabs">'
+        '<button class="stmttab on" data-tab="is">Income Statement</button>'
+        '<button class="stmttab" data-tab="ra">Ratio Analysis</button>'
+        '<button class="stmttab" data-tab="cs">Common Size</button>'
+        "</div>",
+        tables,
+        '<div class="stmtfoot"><div class="pcttoggle" id="pctbox">\u2713</div>'
+        '<span class="pctlbl">Show % change</span>'
+        '<span class="note">Above figures are in \u20b9 crores</span></div></div>',
+    ])
+    return _doc(body, ""), max(HEIGHTS["statements"], height)

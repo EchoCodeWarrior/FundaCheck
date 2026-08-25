@@ -92,18 +92,21 @@ function fcColumns(cid,Y,L,fmt){
 
 
 def doc(body: str, extra_css: str = "") -> str:
-    """Wrap a fragment in a standalone document with fonts + tooltip engine."""
+    """Wrap a fragment in a standalone document with fonts + tooltip engine.
+
+    The engine script is emitted BEFORE the body so chart scripts that run
+    inline right after their SVG can call fcColumns immediately.
+    """
     css = _BASE_CSS + extra_css
-    js = "<script>document.addEventListener('DOMContentLoaded',function(){" \
-         + _BASE_JS.replace("`", "\\`") + "});</script>"
     return (
         '<!DOCTYPE html><html><head><meta charset="utf-8">'
         '<link rel="preconnect" href="https://fonts.googleapis.com">'
         '<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:'
         'wght@400;500;600;700;800&display=swap" rel="stylesheet">'
         f"<style>{css}</style></head><body>"
+        f"<script>{_BASE_JS}</script>"
         f'<div id="wrap">{body}<div id="fctip"></div></div>'
-        "</body>" + js + "</html>"
+        "</body></html>"
     )
 
 
@@ -138,7 +141,10 @@ def hit_columns(xs: list[float], band_w: float, h: float) -> str:
 # --- multi-series line chart --------------------------------------------------
 def line_chart(cid: str, years: list[str],
                series: list[tuple[str, str, list[float]]],
-               fmt=lambda v: f"{v:.2f}%") -> tuple[str, int]:
+               fmt_js: str = 'v=>v.toFixed(2)+"%"',
+               fmt_py=lambda v: f"{v:.2f}%") -> tuple[str, int]:
+    """fmt_py renders the axis labels; fmt_js is the identical format in JS
+    for the hover tooltip. They must agree."""
     w, hh, p = 420, 250, {"l": 42, "r": 14, "t": 30, "b": 30}
     all_vals = [v for _, _, vals in series for v in vals]
     mn, mx = min(0.0, *all_vals), max(all_vals)
@@ -152,7 +158,7 @@ def line_chart(cid: str, years: list[str],
         f'<line x1="{p["l"]}" x2="{w - p["r"]}" y1="{p["t"] + f_ * (hh - p["t"] - p["b"]):.1f}" '
         f'y2="{p["t"] + f_ * (hh - p["t"] - p["b"]):.1f}" stroke="{GRID}"/>'
         f'<text x="{p["l"] - 6}" y="{p["t"] + f_ * (hh - p["t"] - p["b"]) + 3.5:.1f}" '
-        f'text-anchor="end" font-size="10.5" fill="{FAINT}" class="mono">{fmt(mx - f_ * sp)}</text>'
+        f'text-anchor="end" font-size="10.5" fill="{FAINT}" class="mono">{fmt_py(mx - f_ * sp)}</text>'
         for f_ in (0, .5, 1)
     )
     paths = ""
@@ -160,7 +166,7 @@ def line_chart(cid: str, years: list[str],
         d = " ".join(("L" if i else "M") + f"{X(i):.1f} {Yp(v):.1f}"
                      for i, v in enumerate(vals))
         last = vals[-1]
-        tip = _tt(f"{series[si][0]} · {years[-1]}: {fmt(last)}")
+        tip = _tt(f"{series[si][0]} · {years[-1]}: {fmt_py(last)}")
         paths += (f'<path d="{d}" fill="none" stroke="{colour}" stroke-width="2.2" '
                   f'stroke-linejoin="round"/><circle {tip} cx="{xs[-1]:.1f}" '
                   f'cy="{Yp(last):.1f}" r="3.2" fill="{colour}" style="cursor:pointer"/>')
@@ -178,7 +184,6 @@ def line_chart(cid: str, years: list[str],
              xlabels + legend + hit_columns(xs, (w - p["l"] - p["r"]) / max(1, n - 1),
                                             hh - p["b"]))
     rows_js = json.dumps([[lb, c, vals] for lb, c, vals in series])
-    fmt_js = getattr(fmt, "_js", None) or 'v=>v.toFixed(2)+"%"'
     script = (f"<script>(function(){{const Y={json.dumps(years)};"
               f"const L={rows_js};const fmt={fmt_js};"
               f"fcColumns('{cid}',Y,L,fmt);}})();</script>")
@@ -186,7 +191,8 @@ def line_chart(cid: str, years: list[str],
 
 
 def js_fmt(expr: str):
-    """Attach a JS formatting expression to a python no-op formatter."""
+    """Deprecated: kept so older callers still import. Line charts now take
+    fmt_js / fmt_py directly."""
     def _f(v):
         return expr
     _f._js = expr

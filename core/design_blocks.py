@@ -58,10 +58,13 @@ def revenue_trend(model, years: int = 6) -> str:
                 f'<div class="pill-tag">{_crore(float(value))}</div>'
             )
         last = "font-weight:700;color:#15201a" if index == len(sales) - 1 else ""
+        tip = (f' data-tt="{period}: {_crore(float(value))} sales'
+               f'{"" if value != peak else " - peak year"}"')
         bars.append(
             f'<div class="pill-col">'
             f'<div class="pill-wrap">{label}'
-            f'<div class="pill" style="height:{height}px;background:{colour}"></div></div>'
+            f'<div class="pill"{tip} style="height:{height}px;background:{colour};'
+            f'cursor:pointer"></div></div>'
             f'<span style="{last}">{period}</span></div>'
         )
 
