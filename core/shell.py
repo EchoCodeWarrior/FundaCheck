@@ -343,11 +343,11 @@ document.querySelectorAll('.stmttab').forEach(b=>b.addEventListener('click',()=>
   document.querySelectorAll('.stmttable').forEach(t=>
     t.style.display=t.id==='tbl-'+b.dataset.tab?'block':'none');}));
 // % change toggle
+const pt=document.getElementById('pcttoggle');
 const pb=document.getElementById('pctbox');
-if(pb)pb.addEventListener('click',()=>{
+if(pt&&pb)pt.addEventListener('click',()=>{
   pb.classList.toggle('off');
   const on=!pb.classList.contains('off');
-  pb.textContent=on?'\\u2713':'';
   document.querySelectorAll('.pctsub').forEach(e=>
     e.style.display=on?'block':'none');});
 // search filters statement rows + peer names
@@ -861,8 +861,9 @@ def statements_shell(model, query: str = "") -> tuple[str, int]:
         '<button class="stmttab" data-tab="cs">Common Size</button>'
         "</div>",
         tables,
-        '<div class="stmtfoot"><div class="pcttoggle" id="pctbox">\u2713</div>'
-        '<span class="pctlbl">Show % change</span>'
+        '<div class="stmtfoot"><div class="pcttoggle" id="pcttoggle">'
+        '<span class="pctbox" id="pctbox">\u2713</span>'
+        '<span class="pctlbl">Show % change</span></div>'
         '<span class="note">Above figures are in \u20b9 crores</span></div></div>',
     ])
     return _doc(body, ""), max(HEIGHTS["statements"], height)

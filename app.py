@@ -101,22 +101,26 @@ section[data-testid="stSidebar"]{
   border-right:1px solid rgba(255,255,255,.06)!important}
 .side-mark{border-radius:50%!important;
   background:linear-gradient(135deg,#37d67a,#1faa5e)!important;color:#06120c!important}
-.side-brand .name{color:#eaf3ee!important}
-.side-brand .tag{color:#7f8a84!important}
-.nav-head,.step{color:#7f8a84!important}
-.step .n{background:rgba(31,170,94,.16)!important;color:#37d67a!important;
-  border-color:rgba(31,170,94,.32)!important}
-section[data-testid="stSidebar"] [data-testid="stCaptionContainer"]{color:#8b948f!important}
+.side-brand .name{color:#f2f7f4!important}
+.side-brand .tag{color:#9aa8a1!important}
+.nav-head,.step{color:#9aa8a1!important}
+.step .n{background:rgba(31,170,94,.20)!important;color:#57e08e!important;
+  border-color:rgba(31,170,94,.40)!important}
+section[data-testid="stSidebar"] [data-testid="stCaptionContainer"]{color:#a7b1ab!important}
 section[data-testid="stSidebar"] .stButton>button{
   background:transparent!important;border:1px solid transparent!important;
-  color:#aeb8b2!important;justify-content:flex-start!important;text-align:left!important;
+  color:#cdd6d0!important;justify-content:flex-start!important;text-align:left!important;
   font-size:14px!important;font-weight:600!important;padding:.55rem .8rem!important}
+/* No hover animation on the sidebar (design request): inactive items keep
+   their resting look on hover; the active item keeps its green fill on hover. */
 section[data-testid="stSidebar"] .stButton>button:hover{
-  background:rgba(255,255,255,.05)!important;color:#eaf3ee!important;
-  border-color:rgba(255,255,255,.08)!important}
-section[data-testid="stSidebar"] .stButton>button[kind="primary"]{
-  background:rgba(31,170,94,.18)!important;color:#37d67a!important;
-  border-color:rgba(31,170,94,.34)!important}
+  background:transparent!important;color:#cdd6d0!important;
+  border-color:transparent!important}
+section[data-testid="stSidebar"] .stButton>button[kind="primary"],
+section[data-testid="stSidebar"] .stButton>button[kind="primary"]:hover{
+  background:rgba(31,170,94,.20)!important;color:#eafff3!important;
+  border-color:rgba(55,214,122,.45)!important;font-weight:700!important;
+  box-shadow:inset 3px 0 0 #37d67a!important}
 .loaded-chip .txt b{color:#eaf3ee!important}
 """
 
@@ -150,9 +154,11 @@ section[data-testid="stSidebar"] .stButton>button{
   border-radius:14px!important;font-size:19px!important;
   display:flex!important;align-items:center;justify-content:center;text-align:center}
 section[data-testid="stSidebar"] .stButton>button p{width:auto!important;margin:0!important}
+/* no hover animation on the minimized rail either */
 section[data-testid="stSidebar"] .stButton>button:hover{
-  background:#f0f3f1!important;color:#15201a!important}
-section[data-testid="stSidebar"] .stButton>button[kind="primary"]{
+  background:transparent!important;color:#5b625e!important}
+section[data-testid="stSidebar"] .stButton>button[kind="primary"],
+section[data-testid="stSidebar"] .stButton>button[kind="primary"]:hover{
   background:#15201a!important;color:#ffffff!important}
 section[data-testid="stSidebar"] .stButton>button[kind="primary"]::before{
   display:none!important}
@@ -209,11 +215,14 @@ def sidebar() -> tuple[object, str, str]:
         )
 
         # ---- minimize / expand (the design's sidebar toggle) ----
+        # The click is recorded but the rerun is deferred to the very end of the
+        # sidebar (same pattern as navigation below). Rerunning here \u2014 before the
+        # uploader and demo toggle are instantiated \u2014 makes Streamlit discard
+        # their state, which is exactly how minimizing used to throw away the
+        # loaded file / demo model and fall back to the empty landing page.
         collapsed = bool(st.session_state.get("nav_min", False))
-        if st.button("\u00bb" if collapsed else "\u00ab  Minimize",
-                     key="side-min", use_container_width=True):
-            st.session_state.nav_min = not collapsed
-            st.rerun()
+        toggle_min = st.button("\u00bb" if collapsed else "\u00ab  Minimize",
+                               key="side-min", use_container_width=True)
 
         # ---- navigation ----
         current = st.session_state.setdefault("page", "overview")
@@ -285,9 +294,12 @@ def sidebar() -> tuple[object, str, str]:
         st.session_state.sector_pref = sector_key
         st.caption(get_sector(sector_key).notes)
 
+    # Both reruns are deferred to here, after every sidebar widget (uploader,
+    # demo toggle, sector) has been instantiated, so their state survives.
+    if toggle_min:
+        st.session_state.nav_min = not collapsed
+        st.rerun()
     if navigate_to and navigate_to != current:
-        # Safe here: every sidebar widget above has been instantiated, so their
-        # state survives the rerun.
         st.session_state.page = navigate_to
         st.rerun()
 

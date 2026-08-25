@@ -344,8 +344,13 @@ def area_chart(cid, years, layers: list[tuple[str, str, list[float]]],
         d = " ".join(("L" if i else "M") + f"{xs[i]:.1f} {Yp(v):.1f}" for i, v in enumerate(top))
         d += " " + " ".join(f"L{xs[n - 1 - k]:.1f} {Yp(b):.1f}"
                             for k, b in enumerate(reversed(base)))
-        bands += (f'<path{_tt(name)} d="{d} Z" fill="{colour}" stroke="#fff" '
-                  f'stroke-width=".6" style="cursor:pointer"/>')
+        # Tooltip + pointer cursor only when the chart is interactive. The
+        # balance-sheet areas render with hover=False and must stay fully static
+        # (no hover tooltip, no cursor change) per the design request.
+        tt = _tt(name) if hover else ""
+        cur = "cursor:pointer" if hover else "cursor:default"
+        bands += (f'<path{tt} d="{d} Z" fill="{colour}" stroke="#fff" '
+                  f'stroke-width=".6" style="{cur}"/>')
         base = top
     xlabels = "".join(
         f'<text x="{x:.1f}" y="{hh - p["b"] + 15}" text-anchor="middle" font-size="10.5" '
