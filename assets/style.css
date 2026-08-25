@@ -315,11 +315,12 @@ section[data-testid="stSidebar"] {
   background: linear-gradient(180deg, #0d1d16 0%, #0a1610 100%);
 }
 .side-brand {
-  display: flex; align-items: center; gap: .65rem; margin-bottom: .2rem;
+  display: flex; align-items: center; gap: .7rem; margin-bottom: .4rem;
+  padding: .2rem .1rem .3rem;
 }
 .side-mark {
-  width: 34px; height: 34px; border-radius: 10px; flex: none;
-  display: grid; place-items: center; font-weight: 700; font-size: 1rem;
+  width: 40px; height: 40px; border-radius: 50%; flex: none;
+  display: grid; place-items: center; font-weight: 800; font-size: 1.1rem;
   color: #06120c; background: linear-gradient(135deg, #37d67a, var(--s1));
   box-shadow: 0 6px 18px -8px var(--glow);
 }

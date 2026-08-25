@@ -54,12 +54,15 @@ LOGGER = logging.getLogger("fundacheck")
 APP_DIR = Path(__file__).parent
 SAMPLE = APP_DIR / "sample_data" / "3S_model_sample.xlsx"
 
+# (key, label, icon) — the icon is a monochrome glyph that inherits the button's
+# text colour, so it reads light on the dark expanded panel and dark on the white
+# minimized rail. When minimized only the icon is shown.
 NAV_PAGES = [
-    ("overview", "Dashboard"),
-    ("ratios", "Ratio deep dive"),
-    ("lens", "Sector lens"),
-    ("statements", "Statements"),
-    ("qa", "Ask the analyst"),
+    ("overview", "Dashboard", "▦"),        # ▦ grid
+    ("ratios", "Ratio deep dive", "◎"),    # ◎ target
+    ("lens", "Sector lens", "◈"),          # ◈ lens
+    ("statements", "Statements", "▤"),     # ▤ rows
+    ("qa", "Ask the analyst", "✦"),        # ✦ spark
 ]
 
 st.set_page_config(
@@ -81,15 +84,52 @@ def inject_css(mode: str = "dark", minimized: bool = False) -> None:
     css = (APP_DIR / "assets" / "style.css").read_text()
     if mode == "light":
         css += "\n" + (APP_DIR / "assets" / "light.css").read_text()
+    # The expanded sidebar is always the dark panel (design spec), even when the
+    # content area is in day mode — so this layer lands after light.css to win.
+    if not minimized:
+        css += "\n" + SIDEBAR_DARK
     if minimized:
         css += "\n" + MIN_CSS
     st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
 
 
+# The dark expanded rail: forces the dark look over whatever the content theme
+# set, a circular brand mark, and icon+label nav rows.
+SIDEBAR_DARK = """
+section[data-testid="stSidebar"]{
+  background:linear-gradient(180deg,#0d1d16 0%,#0a1610 100%)!important;
+  border-right:1px solid rgba(255,255,255,.06)!important}
+.side-mark{border-radius:50%!important;
+  background:linear-gradient(135deg,#37d67a,#1faa5e)!important;color:#06120c!important}
+.side-brand .name{color:#eaf3ee!important}
+.side-brand .tag{color:#7f8a84!important}
+.nav-head,.step{color:#7f8a84!important}
+.step .n{background:rgba(31,170,94,.16)!important;color:#37d67a!important;
+  border-color:rgba(31,170,94,.32)!important}
+section[data-testid="stSidebar"] [data-testid="stCaptionContainer"]{color:#8b948f!important}
+section[data-testid="stSidebar"] .stButton>button{
+  background:transparent!important;border:1px solid transparent!important;
+  color:#aeb8b2!important;justify-content:flex-start!important;text-align:left!important;
+  font-size:14px!important;font-weight:600!important;padding:.55rem .8rem!important}
+section[data-testid="stSidebar"] .stButton>button:hover{
+  background:rgba(255,255,255,.05)!important;color:#eaf3ee!important;
+  border-color:rgba(255,255,255,.08)!important}
+section[data-testid="stSidebar"] .stButton>button[kind="primary"]{
+  background:rgba(31,170,94,.18)!important;color:#37d67a!important;
+  border-color:rgba(31,170,94,.34)!important}
+.loaded-chip .txt b{color:#eaf3ee!important}
+"""
+
+
 MIN_CSS = """
-section[data-testid="stSidebar"]{min-width:96px!important;max-width:96px!important}
-section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]{gap:.4rem!important}
-.side-brand{justify-content:center}
+/* ---- minimized: a white icon-rail (design spec) ---- */
+section[data-testid="stSidebar"]{
+  min-width:92px!important;max-width:92px!important;
+  background:#ffffff!important;border-right:1px solid #eceeec!important}
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]{gap:.35rem!important}
+
+/* brand: keep only the round mark, centered */
+.side-brand{justify-content:center;padding:.2rem 0 .5rem}
 .side-brand .txtwrap,
 section[data-testid="stSidebar"] [data-testid="stWidgetLabel"],
 section[data-testid="stSidebar"] [data-testid="stCheckbox"],
@@ -99,12 +139,23 @@ section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"],
 section[data-testid="stSidebar"] .step,
 section[data-testid="stSidebar"] .nav-head,
 section[data-testid="stSidebar"] .loaded-chip .txt{display:none!important}
-.loaded-chip{justify-content:center;padding:.5rem .2rem!important}
+.loaded-chip{justify-content:center;padding:.5rem .2rem!important;
+  background:#f2f6f3!important;border-color:#e3ebe5!important}
+
+/* nav: dark icon-only tiles on white; active = filled dark square */
 section[data-testid="stSidebar"] .stButton>button{
-  padding-left:.1rem!important;padding-right:.1rem!important;
-  font-size:17px!important;justify-content:center;text-align:center;
-  min-height:42px}
-section[data-testid="stSidebar"] .stButton>button p{width:100%;text-align:center}
+  color:#5b625e!important;background:transparent!important;border:none!important;
+  padding:0!important;margin:.05rem auto!important;
+  width:46px!important;height:46px!important;min-height:46px!important;
+  border-radius:14px!important;font-size:19px!important;
+  display:flex!important;align-items:center;justify-content:center;text-align:center}
+section[data-testid="stSidebar"] .stButton>button p{width:auto!important;margin:0!important}
+section[data-testid="stSidebar"] .stButton>button:hover{
+  background:#f0f3f1!important;color:#15201a!important}
+section[data-testid="stSidebar"] .stButton>button[kind="primary"]{
+  background:#15201a!important;color:#ffffff!important}
+section[data-testid="stSidebar"] .stButton>button[kind="primary"]::before{
+  display:none!important}
 """
 
 
@@ -172,12 +223,12 @@ def sidebar() -> tuple[object, str, str]:
         # Streamlit discards the state of any widget a run did not render — which
         # is how navigating between pages used to throw the uploaded file away.
         navigate_to = None
-        for key, label in NAV_PAGES:
-            shown = label[0] if collapsed else label
+        for key, label, icon in NAV_PAGES:
+            shown = icon if collapsed else f"{icon} {label}"
             active = key == current
             if st.button(shown, key=f"nav-{key}", use_container_width=True,
                          type="primary" if active else "secondary",
-                         help=None if collapsed else label):
+                         help=label if collapsed else None):
                 navigate_to = key
 
         # Day/Night lives in the main-area top bar now (the design puts it there);
