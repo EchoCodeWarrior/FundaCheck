@@ -483,24 +483,45 @@ def _bar_block(pdf: _Doc, r: R, title: str,
     if len(vals_all) < 3:
         return
     mx = max(abs(v) for v in vals_all) or 1
-    h = 36
+    h = 40
     x, y = _chart_frame(pdf, r, title, "Latest years side by side", h)
+    plot_w = PAGE_W - MARGIN - 20 - x
     n_years = max(len(vals) for _, _, vals in series)
-    group = (PAGE_W - 2 * MARGIN - 24) / n_years
-    bw = min(4, group / (len(series) + 1))
+    group = plot_w / n_years
+    # gridlines + y labels
+    pdf.set_draw_color(238, 240, 238)
+    pdf.set_line_width(.2)
+    pdf.set_font("helvetica", "", 6.5)
+    for f in (0, .5, 1):
+        yy = y + h * f
+        pdf.line(x, yy, x + plot_w, yy)
+        pdf.set_text_color(*FAINT)
+        pdf.set_xy(x - 13, yy - 1.6)
+        pdf.cell(12, 3.2, f"{mx * (1 - f):.1f}", align="R")
+    bw = min(5, group / (len(series) + 1))
     for si, (name, colour, vals) in enumerate(series):
         pdf.set_fill_color(*colour)
         for i, v in enumerate(vals):
             bh = abs(v) / mx * h
-            bx = x + i * group + group * .15 + si * bw
-            pdf.rect(bx, y + h - bh, bw, bh, style="F")
-        pdf.set_font("helvetica", "", 7)
-        pdf.set_text_color(*colour)
-        pdf.set_xy(x, y + h + 2 + si * 3.4)
-        pdf.cell(60, 3, f"- {name}")
+            bx = x + i * group + group * .5 - bw * len(series) / 2 + si * bw
+            pdf.rect(bx, y + h - bh, bw - .6, bh, style="F")
+    # year labels under each group
     pdf.set_font("helvetica", "", 6.5)
     pdf.set_text_color(*FAINT)
-    _finish_chart(pdf, r, h)
+    for i in range(n_years):
+        pdf.set_xy(x + i * group, y + h + 1.5)
+        pdf.cell(group, 3, f"Yr {i + 1}", align="C")
+    # legend with swatches, both entries
+    lx = x
+    for name, colour, _vals in series:
+        pdf.set_fill_color(*colour)
+        pdf.rect(lx, y + h + 6.5, 3, 3, style="F")
+        pdf.set_font("helvetica", "", 7.5)
+        pdf.set_text_color(*BODY)
+        pdf.set_xy(lx + 4.5, y + h + 5.6)
+        pdf.cell(40, 4, name)
+        lx += pdf.get_string_width(name) + 12
+    _finish_chart(pdf, r, h + 8)
 
 
 def _scorecard_block(pdf: _Doc, r: R, result):
@@ -610,8 +631,8 @@ def _heatmap_block(pdf: _Doc, r: R, model):
     for i, lab in enumerate(labels):
         pdf.set_font("helvetica", "", 6.5)
         pdf.set_text_color(63, 71, 68)
-        pdf.set_xy(x - 16, y + i * cell + 1.4)
-        pdf.cell(15, 3, lab, align="R")
+        pdf.set_xy(x - 22, y + i * cell + 1.4)
+        pdf.cell(21, 3, lab, align="R")
         pdf.set_xy(x + i * cell, y + n * cell + 1)
         pdf.cell(cell, 3, lab)
     _finish_chart(pdf, r, size + 4)
@@ -711,11 +732,29 @@ def _waterfall(pdf: _Doc, r: R, model):
         pdf.set_text_color(63, 71, 68)
         pdf.set_xy(bx - step_w * .2, base + 1)
         pdf.cell(step_w * .8, 2.8, _t(name.split(" ")[0][:9]), align="C")
-        pdf.set_font("courier", "B", 6)
+        # numbers on the bars only for Sales and Net profit (mirrors the site);
+        # every other value lives in the flow table below the chart
+        if name in ("Sales", "Net profit"):
+            pdf.set_font("courier", "B", 6)
+            pdf.set_text_color(*INK)
+            pdf.set_xy(bx - step_w * .2, base - bh - 3.4)
+            pdf.cell(step_w * .8, 3, _t(f"{abs(v):,.0f}"), align="C")
+    # the numbers the web version shows on hover, listed under the chart
+    pdf.set_font("helvetica", "", 6.5)
+    col_w2 = (PAGE_W - 2 * MARGIN - 20) / 2
+    for i, (name, v) in enumerate(steps):
+        col = i % 2
+        row = i // 2
+        xx = x + col * col_w2
+        yy2 = y + h + 9 + row * 3.6
+        pdf.set_text_color(63, 71, 68)
+        pdf.set_xy(xx, yy2)
+        pdf.cell(col_w2 * .6, 3, _t(name))
+        pdf.set_font("courier", "", 6.5)
         pdf.set_text_color(*INK)
-        pdf.set_xy(bx - step_w * .2, base - bh - 3.4)
-        pdf.cell(step_w * .8, 3, _t(f"{abs(v):,.0f}"), align="C")
-    _finish_chart(pdf, r, h)
+        pdf.cell(col_w2 * .4, 3, _t(f"{v:,.0f}"), align="R")
+        pdf.set_font("helvetica", "", 6.5)
+    _finish_chart(pdf, r, h + 9 + ((len(steps) + 1) // 2) * 3.6 + 2)
 
 
 def _statements_block(pdf: _Doc, r: R, model):

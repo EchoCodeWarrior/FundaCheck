@@ -387,8 +387,7 @@ def _doc(body: str, scripts: str = "", extra_css: str = "") -> str:
         'wght@400;500;600;700;800&display=swap" rel="stylesheet">'
         f"<style>{SHELL_CSS}{extra_css}</style></head>"
         "<body>"
-        f'<div id="shell"><main>{body}</main></div>'
-        '<div id="toast"></div><div id="fctip"></div>'
+        f'{body}<div id="toast"></div><div id="fctip"></div>'
         f"<script>{BASE_JS}</script><script>{SHELL_JS}</script>{scripts}"
         "</body></html>"
     )
@@ -602,7 +601,7 @@ def _statements_tables(model, query: str) -> str:
 # ==========================================================================
 # public builders - one per Streamlit page
 # ==========================================================================
-HEIGHTS = {"dashboard": 2560, "ratios": 3150, "sector": 2050, "statements": 1050}
+HEIGHTS = {"dashboard": 3700, "ratios": 4500, "sector": 3100, "statements": 1500}
 
 
 def _topbar(current: str) -> str:
@@ -653,23 +652,11 @@ def _hero(model, result) -> str:
            f'<span class="dotsep">\u00b7</span>'
            f'<span class="ticker">{len(years)} PERIODS</span>')
 
-    pdf64 = ""
-    try:
-        from .report import build_pdf
-        pdf64 = base64.b64encode(build_pdf(model, result)).decode()
-    except Exception:                                    # noqa: BLE001
-        pass
-    if pdf64:
-        export = (f'<a class="exportbtn" download="{_esc(model.company)}'
-                  f'_fundacheck_report.pdf" '
-                  f'href="data:application/pdf;base64,{pdf64}">Export Report</a>')
-    else:
-        export = ('<span class="exportbtn" onclick="toast(\'Export unavailable for '
-                  'this model\')" style="cursor:pointer">Export Report</span>')
-
+    # Export lives on the real Streamlit button above the shell (guaranteed to
+    # download); the hero keeps only the market-data card, per the reference.
     return (f'<div class="hero"><div><h1>{_esc(model.company.title())}</h1>'
             f'<div class="herosub">{sub}</div></div>'
-            f'<div class="heroright">{stats}{export}</div></div>')
+            f'<div class="heroright">{stats}</div></div>')
 
 
 def dashboard_shell(model, result, note: dict, peers: list[dict]) -> tuple[str, int]:
@@ -848,7 +835,8 @@ def sector_shell(model, result) -> tuple[str, int]:
         '<div class="card healthrow"><div class="htxt">'
         '<div class="t">Financial health</div><div class="s">Composite index under '
         "this lens</div></div>"
-        f'<div style="position:relative;width:190px;flex:none">{gauge_html}</div>'
+        f'<div style="position:relative;width:190px;height:118px;flex:none">'
+        f"{gauge_html}</div>"
         f'<div class="legendcol">{legend}</div></div>',
         f'<div class="card"><div class="ct">How the ratios move together</div>'
         f'<div class="csub">Pairwise correlation across history</div>{hm_html}</div>'

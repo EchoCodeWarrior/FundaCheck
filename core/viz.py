@@ -418,7 +418,7 @@ def sector_bars(sectors: list[tuple[str, float]], hot: str) -> tuple[str, int]:
 # --- correlation heatmap --------------------------------------------------------------
 def heatmap(labels: list[str], matrix: list[list[float]]) -> tuple[str, int]:
     cell, lab = 46, 118
-    w, h = lab + len(labels) * cell + 6, len(labels) * cell + 96
+    w, h = lab + len(labels) * cell + 6, len(labels) * cell + 112
     cells = ""
     for r, rn in enumerate(labels):
         for c, cn in enumerate(labels):
@@ -440,17 +440,22 @@ def heatmap(labels: list[str], matrix: list[list[float]]) -> tuple[str, int]:
         f'font-size="11" fill="#3f4744">{escape(n)}</text>'
         for r, n in enumerate(labels))
     col_lab = "".join(
-        f'<text x="{lab + c * cell + cell / 2}" y="{len(labels) * cell + 10}" '
-        f'font-size="10.5" fill="{MUTED}" text-anchor="end" '
-        f'transform="rotate(-38 {lab + c * cell + cell / 2} {len(labels) * cell + 10})">'
-        f'{escape(n)}</text>' for c, n in enumerate(labels))
-    leg_y = h - 14
+        f'<text x="{lab + c * cell + cell / 2}" y="{len(labels) * cell + 14}" '
+        f'font-size="10" fill="{MUTED}" text-anchor="end" '
+        f'transform="rotate(-35 {lab + c * cell + cell / 2} '
+        f'{len(labels) * cell + 14})">{escape(n)}</text>'
+        for c, n in enumerate(labels))
+    leg_y = h - 16
     legend = (f'<g transform="translate({lab},{leg_y})">'
               f'<rect x="0" y="-9" width="12" height="12" rx="3" fill="{GREEN}"/>'
               f'<text x="18" y="1" font-size="10.5" fill="{BODY}">moves together</text>'
               f'<rect x="128" y="-9" width="12" height="12" rx="3" fill="{RED}"/>'
               f'<text x="146" y="1" font-size="10.5" fill="{BODY}">moves opposite</text></g>')
-    return _svg(w, h, cells + row_lab + col_lab + legend), h + 10
+    svg = _svg(w, h, cells + row_lab + col_lab + legend)
+    # never let a narrow card shrink the labels into oblivion - scroll instead
+    wrap = ('<div style="overflow-x:auto"><div style="min-width:440px">'
+            + svg + "</div></div>")
+    return wrap, h + 14
 
 
 # --- margin dial ------------------------------------------------------------------------

@@ -284,13 +284,8 @@ def _get_note(model, result, sector_key: str, config: LLMConfig) -> dict:
 
 
 def _render_shell(html: str, height: int) -> None:
-    """One design-exact page, top to bottom, in a single frame.
-
-    scrolling=True so a long page (many strengths, big sankey) can never be
-    clipped by the fixed frame height - the inner scrollbar only appears when
-    the content actually outgrows the estimate.
-    """
-    components.html(html, height=height, scrolling=True)
+    """One design-exact page, top to bottom, in a single frame."""
+    components.html(html, height=height, scrolling=False)
 
 
 def _export_row(model, result) -> None:
@@ -439,13 +434,13 @@ def main() -> None:
 
     if page == "overview":
         note = _get_note(model, result, sector_key, config)
-        if note.get("_error"):
-            st.warning(f"LLM call failed, showing the rule-based note instead. "
-                       f"({note['_error']})")
         peers = st.session_state.setdefault("peers", [])
         html, height = SH.dashboard_shell(model, result, note, peers)
         _export_row(model, result)
         _render_shell(html, height)
+        if note.get("_error"):
+            st.caption(f"AI analyst unreachable ({note['_error']}) - showing the "
+                       "rule-based reading.")
         if result.data_gaps:
             st.caption(
                 "Metrics not found in this workbook (excluded from the score): "
