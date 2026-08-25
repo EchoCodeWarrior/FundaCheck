@@ -379,7 +379,11 @@ def _esc(s) -> str:
 
 
 def _doc(body: str, scripts: str = "", extra_css: str = "") -> str:
-    """Full standalone doc: fonts, shell css, body, shared JS, chart scripts."""
+    """Full standalone doc: fonts, shell css, body, shared JS, chart scripts.
+
+    The page content must live inside #shell > main - that is what the whole
+    stylesheet is keyed on (the floating card, the column layout, the gaps).
+    """
     return (
         '<!DOCTYPE html><html><head><meta charset="utf-8">'
         '<link rel="preconnect" href="https://fonts.googleapis.com">'
@@ -387,7 +391,8 @@ def _doc(body: str, scripts: str = "", extra_css: str = "") -> str:
         'wght@400;500;600;700;800&display=swap" rel="stylesheet">'
         f"<style>{SHELL_CSS}{extra_css}</style></head>"
         "<body>"
-        f'{body}<div id="toast"></div><div id="fctip"></div>'
+        f'<div id="shell"><main>{body}</main></div>'
+        f'<div id="toast"></div><div id="fctip"></div>'
         f"<script>{BASE_JS}</script><script>{SHELL_JS}</script>{scripts}"
         "</body></html>"
     )
