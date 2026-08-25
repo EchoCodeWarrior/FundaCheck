@@ -298,10 +298,10 @@ def deepdive_charts(model) -> dict[str, tuple[str, int]]:
     liab_layers = _bs_layers(model, False)
     if len(asset_layers) >= 2:
         charts["assets"] = viz.area_chart("fcAssets", years[-len(asset_layers[0][2]):],
-                                          asset_layers)
+                                          asset_layers, hover=False)
     if len(liab_layers) >= 2:
         charts["liab"] = viz.area_chart("fcLiab", years[-len(liab_layers[0][2]):],
-                                        liab_layers)
+                                        liab_layers, hover=False)
     return charts
 
 
@@ -517,8 +517,7 @@ def statements_html(model, tab: str, show_pct: bool, query: str) -> str:
                                 f'font-family:{MONO}">—</div>')
             val_txt = _fmt_n(v) if v is not None else "—"
             tds += (f'<td style="padding:10px 14px;text-align:right;'
-                    f'border-bottom:1px solid #f1f3f1;white-space:nowrap;'
-                    f'cursor:default" data-tt="{tip_text(name, years, vals)}">'
+                    f'border-bottom:1px solid #f1f3f1;white-space:nowrap">'
                     f'<div style="font-size:17px;font-weight:{800 if head_row else 600};'
                     f'color:{INK};letter-spacing:-.2px;font-family:{MONO}">{val_txt}</div>'
                     f'{pct_html}</td>')

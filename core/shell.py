@@ -115,6 +115,9 @@ text{font-family:'Plus Jakarta Sans',system-ui,sans-serif}
 .kpi.score{color:#fff;background:radial-gradient(130% 130% at 85% 15%,#2a9c62 0%,
   #177245 45%,#0d4a2c 100%)}
 .kpi.score .circ{border-color:rgba(255,255,255,.5);color:#fff}
+.kpi.score .name{color:#fff}
+.kpi.score .ft{color:rgba(255,255,255,.92)}
+.kpi.score .chip{background:rgba(255,255,255,.28);color:#fff}
 .kpi .big{font-size:44px;font-weight:800;letter-spacing:-1.5px;color:#15201a;
   padding:14px 0 12px}
 .kpi.score .big{color:#fff}
@@ -172,13 +175,29 @@ text{font-family:'Plus Jakarta Sans',system-ui,sans-serif}
   minmax(min(280px,100%),1fr));gap:14px;align-items:start}
 .grid-300{display:grid;grid-template-columns:repeat(auto-fit,
   minmax(min(300px,100%),1fr));gap:14px;align-items:start}
-.grid-440{display:grid;grid-template-columns:repeat(auto-fit,
-  minmax(min(440px,100%),1fr));gap:14px;align-items:start}
+.grid-440{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;
+  align-items:start}
 .ct{font-size:17px;font-weight:700;color:#15201a;white-space:nowrap}
 .ct-row{display:flex;align-items:baseline;justify-content:space-between}
 .csub{font-size:12.5px;color:#9aa09d;padding:4px 0 8px}
 .pilltag{font-size:12px;font-weight:700;color:#177245;border:1.5px solid #cfe2d7;
   border-radius:20px;padding:6px 12px}
+
+/* revenue trend pill bars (reference design) */
+.pill-head{display:flex;align-items:baseline;justify-content:space-between}
+.pill-note{font-size:12.5px;color:#9aa09d}
+.pill-row{display:flex;align-items:flex-end;gap:10px;height:184px;
+  padding:46px 2px 0;min-width:0}
+.pill-col{flex:1;min-width:0;display:flex;flex-direction:column;
+  align-items:center;gap:9px}
+.pill-col span{font-size:13px;color:#8b918e}
+.pill-wrap{position:relative;width:100%;display:flex;align-items:flex-end;
+  justify-content:center}
+.pill{width:100%;border-radius:40px;transition:filter .2s ease}
+.pill-col:hover .pill{filter:brightness(1.06)}
+.pill-tag{position:absolute;top:-32px;left:50%;transform:translateX(-50%);
+  background:#eef4f0;border-radius:8px;padding:4px 8px;font-size:11.5px;
+  font-weight:700;color:#0f5b34;white-space:nowrap}
 
 /* stat mini-cards (ratio deep dive) */
 .statgrid{display:grid;grid-template-columns:repeat(auto-fit,
@@ -222,7 +241,7 @@ text{font-family:'Plus Jakarta Sans',system-ui,sans-serif}
 .pctbox{width:17px;height:17px;border-radius:5px;background:#177245;border:2px solid
   #177245;display:flex;align-items:center;justify-content:center;color:#fff;
   font-size:11px;font-weight:800}
-.pctbox.off{background:#fff}
+.pctbox.off{background:#fff;border-color:#c9cec9;color:transparent}
 .pctlbl{font-size:13px;color:#3f4744}
 .stmtfoot{display:flex;align-items:center;gap:12px;padding-top:14px;flex-wrap:wrap}
 .stmtfoot .note{margin-left:auto;font-size:12px;color:#9aa09d}
@@ -282,7 +301,7 @@ tr.head .val{font-weight:800}
 .hit{cursor:crosshair}
 """
 
-BASE_JS = """
+FC_DEFS = """
 const tip=document.getElementById('fctip');
 function fcShow(x,y,html){tip.innerHTML=html;tip.style.display='block';
   let px=x+14;if(px+tip.offsetWidth>window.innerWidth-8)px=x-tip.offsetWidth-14;
@@ -290,10 +309,11 @@ function fcShow(x,y,html){tip.innerHTML=html;tip.style.display='block';
   tip.style.top=Math.max(4,Math.min(y-tip.offsetHeight/2,
     window.innerHeight-tip.offsetHeight-4))+'px';}
 function fcHide(){tip.style.display='none';}
-document.querySelectorAll('[data-tt]').forEach(el=>{
-  el.addEventListener('mousemove',e=>{
-    fcShow(e.clientX,e.clientY,el.getAttribute('data-tt'));});
-  el.addEventListener('mouseleave',fcHide);});
+function fcBindTips(){
+  document.querySelectorAll('[data-tt]').forEach(el=>{
+    el.addEventListener('mousemove',e=>{
+      fcShow(e.clientX,e.clientY,el.getAttribute('data-tt'));});
+    el.addEventListener('mouseleave',fcHide);});}
 function fcColumns(cid,Y,L,fmt){
   const svg=document.getElementById(cid);
   if(!svg)return;
@@ -305,11 +325,14 @@ function fcColumns(cid,Y,L,fmt){
       fcShow(e.clientX,e.clientY,'<div class="yr">'+Y[i]+'</div>'+rows);
       xl.forEach(x=>x.style.display='none');if(xl[i])xl[i].style.display='block';});
     el.addEventListener('mouseleave',()=>{fcHide();
-      xl.forEach(x=>x.style.display='none');});});
-}
+      xl.forEach(x=>x.style.display='none');});});}
 function toast(msg){const t=document.getElementById('toast');
   t.textContent=msg;t.style.opacity=1;
   clearTimeout(t._h);t._h=setTimeout(()=>t.style.opacity=0,1800);}
+"""
+
+FC_BIND = """
+fcBindTips();
 """
 
 SHELL_JS = """
@@ -379,10 +402,11 @@ def _esc(s) -> str:
 
 
 def _doc(body: str, scripts: str = "", extra_css: str = "") -> str:
-    """Full standalone doc: fonts, shell css, body, shared JS, chart scripts.
+    """Full standalone doc.
 
-    The page content must live inside #shell > main - that is what the whole
-    stylesheet is keyed on (the floating card, the column layout, the gaps).
+    Order matters: the tooltip *functions* are defined before the body so the
+    chart scripts (which sit inline next to their SVG and call fcColumns
+    immediately) can bind; the [data-tt] binding runs after the body exists.
     """
     return (
         '<!DOCTYPE html><html><head><meta charset="utf-8">'
@@ -391,9 +415,11 @@ def _doc(body: str, scripts: str = "", extra_css: str = "") -> str:
         'wght@400;500;600;700;800&display=swap" rel="stylesheet">'
         f"<style>{SHELL_CSS}{extra_css}</style></head>"
         "<body>"
+        f"<script>{FC_DEFS}</script>"
         f'<div id="shell"><main>{body}</main></div>'
         f'<div id="toast"></div><div id="fctip"></div>'
-        f"<script>{BASE_JS}</script><script>{SHELL_JS}</script>{scripts}"
+        f"<script>{FC_BIND}</script>"
+        f"<script>{SHELL_JS}</script>{scripts}"
         "</body></html>"
     )
 
@@ -606,7 +632,7 @@ def _statements_tables(model, query: str) -> str:
 # ==========================================================================
 # public builders - one per Streamlit page
 # ==========================================================================
-HEIGHTS = {"dashboard": 3700, "ratios": 4500, "sector": 3100, "statements": 1500}
+HEIGHTS = {"dashboard": 3150, "ratios": 3050, "sector": 2500, "statements": 1100}
 
 
 def _topbar(current: str) -> str:
@@ -657,11 +683,23 @@ def _hero(model, result) -> str:
            f'<span class="dotsep">\u00b7</span>'
            f'<span class="ticker">{len(years)} PERIODS</span>')
 
-    # Export lives on the real Streamlit button above the shell (guaranteed to
-    # download); the hero keeps only the market-data card, per the reference.
+    # Export Report sits in the hero, exactly where the reference puts it.
+    # The PDF is embedded as a data URI; Streamlit's component iframes carry
+    # no sandbox, so the download goes straight to the browser.
+    export = ""
+    try:
+        from .report import build_pdf
+        pdf64 = base64.b64encode(build_pdf(model, result)).decode()
+        export = (f'<a class="exportbtn" download="{_esc(model.company)}'
+                  f'_fundacheck_report.pdf" '
+                  f'href="data:application/pdf;base64,{pdf64}">Export Report</a>')
+    except Exception:                                    # noqa: BLE001
+        export = ('<span class="exportbtn" onclick="toast(\'Export unavailable '
+                  'for this model\')" style="cursor:pointer">Export Report</span>')
+
     return (f'<div class="hero"><div><h1>{_esc(model.company.title())}</h1>'
             f'<div class="herosub">{sub}</div></div>'
-            f'<div class="heroright">{stats}</div></div>')
+            f'<div class="heroright">{stats}{export}</div></div>')
 
 
 def dashboard_shell(model, result, note: dict, peers: list[dict]) -> tuple[str, int]:
@@ -689,8 +727,8 @@ def dashboard_shell(model, result, note: dict, peers: list[dict]) -> tuple[str, 
          f"<p>{_esc(summary)}</p></div>{_drivers_html(result)}</div>"),
         _strengths_risks(note, result),
         '<div class="grid-auto">'
-        f'<div class="card"><div class="ct-row"><span class="ct">Revenue Trend'
-        f"</span><span class=\"csub\" style=\"padding:0\">\u20b9 crore</span></div>"
+        '<div class="card"><div class="ct-row"><span class="ct">Revenue Trend'
+        "</span></div>"
         f"{rev_html}</div>",
         f'<div class="card"><div class="ct-row"><span class="ct">Valuation</span>'
         f'<span style="font-size:15px;color:#9aa09d">\u203a</span></div>'
@@ -728,42 +766,6 @@ def _gauge_inline_legend() -> str:
 
 
 def ratios_shell(model, result) -> tuple[str, int]:
-    years = S.full_years(model)
-    latest_year = years[-1] if years else model.latest_year
-
-    def pct_val(*names):
-        s = S.pct_series(S.ser(model, *names))
-        return float(s.iloc[-1]) if not s.empty else None
-
-    npg, rev_g = pct_val("Net Profit Growth"), pct_val("Sales Growth")
-    np_v = S.last_two(S.ser(model, "Net Profit"))
-    rev_v = S.last_two(S.ser(model, "Sales"))
-    other_v = S.last_two(S.ser(model, "Other Income"))
-    ebit_v = S.last_two(S.ser(model, "EBIT (OPM)", "EBIT (Operating Profit)", "EBITDA"))
-
-    def growth_card(growth, big_vals, label, tone_hi):
-        if growth is None or not big_vals[0]:
-            return ""
-        arrow = "\u25b2" if growth >= 0 else "\u25bc"
-        tone = "good" if growth >= tone_hi else ("warn" if growth >= 0 else "bad")
-        prev_lab = f"{years[-2]} cr" if len(years) > 1 else "previous"
-        return S.stat_card(arrow, tone, f"{growth:.1f}%", label,
-                           S.cr(big_vals[0]), f"{latest_year} cr",
-                           S.cr(big_vals[1]) or "n/a", prev_lab)
-
-    card_np = growth_card(npg, np_v, "Net profit growth", 18)
-    card_rev = growth_card(rev_g, rev_v, "Revenue growth", 10)
-    card_other = ""
-    if other_v[0]:
-        note_tone = AMBER_TXT if ebit_v[0] and other_v[0] > ebit_v[0] else GREEN
-        note_txt = (f"above EBIT of {S.cr(ebit_v[0])}"
-                    if ebit_v[0] and other_v[0] > ebit_v[0]
-                    else "within operating income")
-        card_other = ('<div class="statgrid">'
-                      + S.simple_card(f"Other income, {latest_year}",
-                                      S.cr(other_v[0]), note_txt, note_tone)
-                      + "</div>")
-    dials_html, dials_h = S.dials_row(model)
     cost_html, cost_h = S.cost_card(model)
     rows = [(S.short_name(m.metric), m.display(m.latest), float(m.score))
             for m in result.metrics]
@@ -791,24 +793,18 @@ def ratios_shell(model, result) -> tuple[str, int]:
         '<div class="pghead"><span class="pt">Ratio deep dive</span>'
         '<span class="ps">All nine categories from the Ratio Analysis sheet.</span>'
         "</div>",
-        '<div class="rowwrap"><div class="leftstack">',
-        f'<div class="statgrid">{card_np}</div>' if card_np else "",
-        card_other,
-        f'<div class="statgrid">{card_rev}</div>' if card_rev else "",
-        f'<div style="width:min(350px,100%)">{S.roce_card(model, result)}</div>',
-        "</div>",
-        '<div class="rightstack">',
-        f'<div class="card"><div class="dialcard-hd"><div class="t">Overall profit '
-        f'margin</div><div class="s">Latest year, dial scaled 0\u201330%</div></div>'
-        f"{dials_html}</div>",
-        f'<div class="card"><div class="ct">Where each \u20b9100 of sales goes</div>'
+        '<div class="rowwrap">',
+        f'<div style="flex:0 1 350px;min-width:280px">'
+        f"{S.roce_card(model, result)}</div>",
+        f'<div class="card" style="flex:1;min-width:300px">'
+        f'<div class="ct">Where each \u20b9100 of sales goes</div>'
         f'<div class="csub">Latest-year cost structure</div>{cost_html}</div>',
-        "</div></div>",
+        "</div>",
         f'<div class="strip"><div class="slabel">RATIO SCORECARD \u2014 SCORED '
         f'AGAINST SECTOR BANDS</div>{sc_html}</div>',
         f'<div class="grid-440">{chart_cards}</div>',
     ])
-    est = 1500 + sum(charts[k][1] + 90 for k in charts) // 2 + 400
+    est = 1250 + sum(charts[k][1] + 90 for k in charts) // 2 + 300
     return _doc(body, ""), max(HEIGHTS["ratios"], est)
 
 

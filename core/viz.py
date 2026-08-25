@@ -321,7 +321,8 @@ def cash_chart(years, cfo, cfi, cff) -> tuple[str, int]:
 
 
 # --- stacked area ----------------------------------------------------------------
-def area_chart(cid, years, layers: list[tuple[str, str, list[float]]]) -> tuple[str, int]:
+def area_chart(cid, years, layers: list[tuple[str, str, list[float]]],
+               hover: bool = True) -> tuple[str, int]:
     w, hh, p = 420, 250, {"l": 46, "r": 14, "t": 30, "b": 44}
     n = len(years)
     totals = [sum(l[2][i] for l in layers) for i in range(n)]
@@ -356,10 +357,16 @@ def area_chart(cid, years, layers: list[tuple[str, str, list[float]]]) -> tuple[
         f'<text x="14" y="1.5" font-size="10" fill="{BODY}">{nm}</text></g>'
         for i, (nm, c, _) in enumerate(layers))
     L = json.dumps([[nm, c, vals] for nm, c, vals in layers])
-    script = (f"<script>(function(){{const Y={json.dumps(years)};const L={L};"
-              "fcColumns('" + cid + "',Y,L,v=>Math.round(v).toLocaleString('en-IN'));})();</script>")
-    inner = grid + bands + crosshair(w, hh - p["b"], xs) + xlabels + legend \
-        + hit_columns(xs, (w - p["l"] - p["r"]) / max(1, n - 1), hh - p["b"])
+    script = ""
+    inter = ""
+    if hover:
+        script = (f"<script>(function(){{const Y={json.dumps(years)};const L={L};"
+                  "fcColumns('" + cid
+                  + "',Y,L,v=>Math.round(v).toLocaleString('en-IN'));})();</script>")
+        inter = (crosshair(w, hh - p["b"], xs)
+                 + hit_columns(xs, (w - p["l"] - p["r"]) / max(1, n - 1),
+                               hh - p["b"]))
+    inner = grid + bands + inter + xlabels + legend
     return _svg(w, hh, inner, cid) + script, 300
 
 
@@ -378,8 +385,7 @@ def scorecard_chart(rows: list[tuple[str, str, float]]) -> tuple[str, int]:
     bars = ""
     for i, (name, latest, sc) in enumerate(ordered):
         y = i * row_h + 4
-        bars += (f'<g{_tt(f"{name}: {latest} · score {sc:.0f}/100 ({band_word(sc)})")}'
-                 f'style="cursor:pointer">'
+        bars += (f'<g>'
                  f'<text x="{lx - 9}" y="{y + 8}" text-anchor="end" font-size="10" '
                  f'fill="#3f4744">{escape(name)}</text>'
                  f'<rect x="{lx}" y="{y}" width="{max(2, sx(sc) - lx):.1f}" height="9.5" '
@@ -403,8 +409,7 @@ def sector_bars(sectors: list[tuple[str, float]], hot: str) -> tuple[str, int]:
         y = i * srh + 4
         x2 = slx + sc / 100 * (sw - slx - 66)
         is_hot = name.strip().lower().startswith(hot.strip().lower()[:12])
-        rows += (f'<g{_tt(f"{name}: score {sc:.0f}/100 · {band_word(sc)}")}'
-                 f'style="cursor:pointer">'
+        rows += (f'<g>'
                  f'<text x="{slx - 8}" y="{y + 8.5}" text-anchor="end" font-size="9.5" '
                  f'fill="{"#15201a" if is_hot else "#3f4744"}" '
                  f'font-weight="{"700" if is_hot else "400"}">{escape(name)}</text>'
@@ -429,7 +434,7 @@ def heatmap(labels: list[str], matrix: list[list[float]]) -> tuple[str, int]:
                 bg = (f"oklch({0.96 - abs(v) * .40:.3f} {0.02 + abs(v) * .12:.3f} 28)")
             fg = "#fff" if abs(v) > .55 else BODY
             cells += (
-                f'<g{_tt(f"{rn} × {cn}: {v:+.2f}")} style="cursor:pointer">'
+                f'<g>'
                 f'<rect x="{lab + c * cell}" y="{r * cell}" width="{cell - 2}" '
                 f'height="{cell - 2}" rx="4" fill="{bg}"/>'
                 f'<text x="{lab + c * cell + (cell - 2) / 2}" '

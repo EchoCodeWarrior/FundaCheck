@@ -87,20 +87,24 @@ def inject_css(mode: str = "dark", minimized: bool = False) -> None:
 
 
 MIN_CSS = """
-section[data-testid="stSidebar"]{min-width:92px!important;max-width:92px!important}
-.side-brand .txtwrap{display:none}
-.side-brand .side-mark{margin:0 auto}
-.nav-head,.step,[class*="detected"]{display:none!important}
-section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"],
-section[data-testid="stSidebar"] .stSelectbox,
+section[data-testid="stSidebar"]{min-width:96px!important;max-width:96px!important}
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]{gap:.4rem!important}
+.side-brand{justify-content:center}
+.side-brand .txtwrap,
 section[data-testid="stSidebar"] [data-testid="stWidgetLabel"],
+section[data-testid="stSidebar"] [data-testid="stCheckbox"],
 section[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
-section[data-testid="stSidebar"] .stToggle{display:none!important}
-.loaded-chip{justify-content:center;padding:.55rem .3rem!important}
-.loaded-chip .txt{display:none}
+section[data-testid="stSidebar"] .stSelectbox,
+section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"],
+section[data-testid="stSidebar"] .step,
+section[data-testid="stSidebar"] .nav-head,
+section[data-testid="stSidebar"] .loaded-chip .txt{display:none!important}
+.loaded-chip{justify-content:center;padding:.5rem .2rem!important}
 section[data-testid="stSidebar"] .stButton>button{
-  padding-left:.15rem!important;padding-right:.15rem!important;
-  font-size:16px!important;justify-content:center;text-align:center}
+  padding-left:.1rem!important;padding-right:.1rem!important;
+  font-size:17px!important;justify-content:center;text-align:center;
+  min-height:42px}
+section[data-testid="stSidebar"] .stButton>button p{width:100%;text-align:center}
 """
 
 
@@ -284,20 +288,14 @@ def _get_note(model, result, sector_key: str, config: LLMConfig) -> dict:
 
 
 def _render_shell(html: str, height: int) -> None:
-    """One design-exact page, top to bottom, in a single frame."""
-    components.html(html, height=height, scrolling=False)
+    """
+    One design-exact page, top to bottom, in a single frame.
 
-
-def _export_row(model, result) -> None:
-    """Real Export Report button (the hero carries an in-page copy too)."""
-    _, btn = st.columns([5.4, 1])
-    with btn:
-        st.download_button(
-            "⤓  Export Report", data=_export_report(model, result),
-            file_name=f"{model.company}_fundacheck_report.pdf",
-            mime="application/pdf", key="export-report",
-            use_container_width=True,
-        )
+    scrolling=True is the safety net: if a workbook renders taller than the
+    estimated height, the frame scrolls instead of clipping content, while the
+    tuned heights keep the empty overshoot minimal.
+    """
+    components.html(html, height=height, scrolling=True)
 
 
 def _page_header(title: str, subtitle: str) -> None:
@@ -314,7 +312,6 @@ def _page_header(title: str, subtitle: str) -> None:
 def ratios_tab(model, result) -> None:
     """Ratio deep dive - the reference section, one shell, hover everywhere."""
     html, height = SH.ratios_shell(model, result)
-    _export_row(model, result)
     _render_shell(html, height)
 
 def statements_tab(model) -> None:
@@ -436,7 +433,6 @@ def main() -> None:
         note = _get_note(model, result, sector_key, config)
         peers = st.session_state.setdefault("peers", [])
         html, height = SH.dashboard_shell(model, result, note, peers)
-        _export_row(model, result)
         _render_shell(html, height)
         if note.get("_error"):
             st.caption(f"AI analyst unreachable ({note['_error']}) - showing the "
