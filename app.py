@@ -54,6 +54,10 @@ LOGGER = logging.getLogger("fundacheck")
 APP_DIR = Path(__file__).parent
 SAMPLE = APP_DIR / "sample_data" / "3S_model_sample.xlsx"
 
+# Bump this on every deploy-worth change so the sidebar can show which build is
+# live — the quickest way to tell a fresh deploy from a stale cached view.
+BUILD_TAG = "2026-08-25 · r4 (contrast + dashboard fit)"
+
 # (key, label, icon) — the icon is a monochrome glyph that inherits the button's
 # text colour, so it reads light on the dark expanded panel and dark on the white
 # minimized rail. When minimized only the icon is shown.
@@ -293,6 +297,15 @@ def sidebar() -> tuple[object, str, str]:
         )
         st.session_state.sector_pref = sector_key
         st.caption(get_sector(sector_key).notes)
+
+        # Visible build stamp: lets you confirm at a glance whether the browser is
+        # showing the freshly deployed code or a stale cached view.
+        st.markdown(
+            f'<div style="margin-top:14px;font-family:ui-monospace,Menlo,monospace;'
+            f'font-size:10px;letter-spacing:.6px;color:#6f7a74">'
+            f'BUILD {BUILD_TAG}</div>',
+            unsafe_allow_html=True,
+        )
 
     # Both reruns are deferred to here, after every sidebar widget (uploader,
     # demo toggle, sector) has been instantiated, so their state survives.
