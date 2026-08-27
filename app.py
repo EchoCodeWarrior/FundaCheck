@@ -1,532 +1,629 @@
-"""
-FundaCheck — an AI-assisted fundamental analysis dashboard.
+"""FundaCheck web application.
 
-Upload a 3-statement Excel model, pick the sector, and the terminal turns it
-into an interactive dashboard plus a STRONG / NEUTRAL / WEAK verdict that is
-judged against sector-specific benchmarks rather than one universal rule book.
-
-Run it with:   streamlit run app.py
+The original project used Streamlit for its presentation layer. This module is
+now a small Flask API and static-file server so the same parser/scoring engine
+can power a responsive frontend without coupling the product to Streamlit.
 """
 
 from __future__ import annotations
 
-import logging
 import os
-from contextlib import contextmanager
+import re
+import uuid
+from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
-import streamlit as st
-import streamlit.components.v1 as components
+from dotenv import load_dotenv
+from flask import Flask, jsonify, request, send_file, send_from_directory
 
-from core import charts as C
-from core import design_blocks as D
-from core import report as REP
 from core import sections as S
-from core import shell as SH
-from core import viz
-from core.llm import LLMConfig, analyse, answer_question, config_from_env
 from core.derive import fill_missing_ratios
-from core.parser import ParseError, load_model
-from core.scoring import assess, compare_sectors
-from core.sectors import (
-    PERCENT_METRICS,
-    SECTORS,
-    detect_sector,
-    get_sector,
-    sector_choices,
-)
+from core.llm import LLMRequestError, answer_question, config_from_env, offline_note
+from core.parser import FinancialModel, ParseError, load_model
+from core.report import build_pdf
+from core.scoring import Assessment, assess
+from core.sectors import detect_sector, get_sector, sector_choices
 
-# Ratios stored as a decimal that read better as a percentage than as "0.02".
-EXTRA_PERCENT_METRICS = {"CFO / Sales", "CFO / Total Assets", "CFO / Total Debt",
-                         "Dividend Payout %", "Retained Earnings%"}
 
-# Figures reported in crore in an Indian 3-statement model.
-CURRENCY_METRICS = {
-    "Sales", "Net Profit", "EBITDA", "EBIT (OPM)", "Gross Margin",
-    "Total Asset", "Total Liabilities", "Borrowings", "Reserves",
-    "Cash from Operating Activity", "Cash from Investing Activity",
-    "Cash from Financing Activity", "Net Cash Flow", "Market Capitalization",
-}
-
-LOGGER = logging.getLogger("fundacheck")
-
-APP_DIR = Path(__file__).parent
+APP_DIR = Path(__file__).resolve().parent
 SAMPLE = APP_DIR / "sample_data" / "3S_model_sample.xlsx"
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
-# Bump this on every deploy-worth change so the sidebar can show which build is
-# live — the quickest way to tell a fresh deploy from a stale cached view.
-BUILD_TAG = "2026-08-25 · r4 (contrast + dashboard fit)"
+# Local development convenience: .env is ignored by git and never sent to the
+# browser. Existing process/deployment variables win because load_dotenv does
+# not override variables that are already set.
+load_dotenv(APP_DIR / ".env")
 
-# (key, label, icon) — the icon is a monochrome glyph that inherits the button's
-# text colour, so it reads light on the dark expanded panel and dark on the white
-# minimized rail. When minimized only the icon is shown.
-NAV_PAGES = [
-    ("overview", "Dashboard", "▦"),        # ▦ grid
-    ("ratios", "Ratio deep dive", "◎"),    # ◎ target
-    ("lens", "Sector lens", "◈"),          # ◈ lens
-    ("statements", "Statements", "▤"),     # ▤ rows
-    ("qa", "Ask the analyst", "✦"),        # ✦ spark
-]
+app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
-st.set_page_config(
-    page_title="FundaCheck · Fundamental Analysis",
-    page_icon="◈",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+# A dataset is intentionally session-scoped in memory for this lightweight
+# portfolio app. The browser holds the opaque id; uploaded workbooks never get
+# written to disk. A production deployment can swap this dict for Redis or a
+# database without changing the frontend contract.
+DATASETS: dict[str, dict[str, Any]] = {}
 
 
-# --------------------------------------------------------------------------
-# small UI helpers
-# --------------------------------------------------------------------------
-def inject_css(mode: str = "dark", minimized: bool = False) -> None:
-    """
-    Load the stylesheet, plus the light overrides when day mode is on, plus
-    the narrow-sidebar rules when the Minimize toggle is engaged.
-    """
-    css = (APP_DIR / "assets" / "style.css").read_text()
-    if mode == "light":
-        css += "\n" + (APP_DIR / "assets" / "light.css").read_text()
-    # The expanded sidebar is always the dark panel (design spec), even when the
-    # content area is in day mode — so this layer lands after light.css to win.
-    if not minimized:
-        css += "\n" + SIDEBAR_DARK
-    if minimized:
-        css += "\n" + MIN_CSS
-    st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+def _number(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if pd.isna(value) else value
 
 
-# The dark expanded rail: forces the dark look over whatever the content theme
-# set, a circular brand mark, and icon+label nav rows.
-SIDEBAR_DARK = """
-section[data-testid="stSidebar"]{
-  background:linear-gradient(180deg,#0d1d16 0%,#0a1610 100%)!important;
-  border-right:1px solid rgba(255,255,255,.06)!important}
-.side-mark{border-radius:50%!important;
-  background:linear-gradient(135deg,#37d67a,#1faa5e)!important;color:#06120c!important}
-.side-brand .name{color:#f2f7f4!important}
-.side-brand .tag{color:#aebab3!important}
-.nav-head,.step{color:#aebab3!important}
-.step .n{background:rgba(31,170,94,.22)!important;color:#5fe996!important;
-  border-color:rgba(31,170,94,.42)!important}
-section[data-testid="stSidebar"] [data-testid="stCaptionContainer"]{color:#b6bfb9!important}
-section[data-testid="stSidebar"] .stButton>button{
-  background:transparent!important;border:1px solid transparent!important;
-  color:#dde4df!important;justify-content:flex-start!important;text-align:left!important;
-  font-size:14px!important;font-weight:600!important;padding:.55rem .8rem!important}
-/* No hover animation on the sidebar (design request): inactive items keep
-   their resting look on hover; the active item keeps its green fill on hover. */
-section[data-testid="stSidebar"] .stButton>button:hover{
-  background:transparent!important;color:#dde4df!important;
-  border-color:transparent!important}
-section[data-testid="stSidebar"] .stButton>button[kind="primary"],
-section[data-testid="stSidebar"] .stButton>button[kind="primary"]:hover{
-  background:rgba(31,170,94,.20)!important;color:#eafff3!important;
-  border-color:rgba(55,214,122,.45)!important;font-weight:700!important;
-  box-shadow:inset 3px 0 0 #37d67a!important}
-.loaded-chip .txt b{color:#eaf3ee!important}
-"""
+def _clean_name(value: str) -> str:
+    return re.sub(r"\s+", " ", Path(value).stem.replace("_", " ")).strip().title()
 
 
-MIN_CSS = """
-/* ---- minimized: a white icon-rail (design spec) ---- */
-section[data-testid="stSidebar"]{
-  min-width:92px!important;max-width:92px!important;
-  background:#ffffff!important;border-right:1px solid #eceeec!important}
-section[data-testid="stSidebar"] [data-testid="stVerticalBlock"]{gap:.35rem!important}
-
-/* brand: keep only the round mark, centered */
-.side-brand{justify-content:center;padding:.2rem 0 .5rem}
-.side-brand .txtwrap,
-section[data-testid="stSidebar"] [data-testid="stWidgetLabel"],
-section[data-testid="stSidebar"] [data-testid="stCheckbox"],
-section[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
-section[data-testid="stSidebar"] .stSelectbox,
-section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"],
-section[data-testid="stSidebar"] .step,
-section[data-testid="stSidebar"] .nav-head,
-section[data-testid="stSidebar"] .loaded-chip .txt{display:none!important}
-.loaded-chip{justify-content:center;padding:.5rem .2rem!important;
-  background:#f2f6f3!important;border-color:#e3ebe5!important}
-
-/* nav: dark icon-only tiles on white; active = filled dark square */
-section[data-testid="stSidebar"] .stButton>button{
-  color:#5b625e!important;background:transparent!important;border:none!important;
-  padding:0!important;margin:.05rem auto!important;
-  width:46px!important;height:46px!important;min-height:46px!important;
-  border-radius:14px!important;font-size:19px!important;
-  display:flex!important;align-items:center;justify-content:center;text-align:center}
-section[data-testid="stSidebar"] .stButton>button p{width:auto!important;margin:0!important}
-/* no hover animation on the minimized rail either */
-section[data-testid="stSidebar"] .stButton>button:hover{
-  background:transparent!important;color:#5b625e!important}
-section[data-testid="stSidebar"] .stButton>button[kind="primary"],
-section[data-testid="stSidebar"] .stButton>button[kind="primary"]:hover{
-  background:#15201a!important;color:#ffffff!important}
-section[data-testid="stSidebar"] .stButton>button[kind="primary"]::before{
-  display:none!important}
-"""
+def _norm(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value).lower())
 
 
-@contextmanager
-def card(title: str):
-    """
-    A titled panel.
+def _csv_model(raw: bytes, filename: str) -> FinancialModel:
+    """Read a simple metric-by-year CSV as a FinancialModel.
 
-    Streamlit widgets cannot be written inside a raw HTML <div>, so the panel is
-    a real bordered container and the styling is applied from style.css.
-    """
-    with st.container(border=True):
-        st.markdown(f'<div class="card-title">{title}</div>', unsafe_allow_html=True)
-        yield
-
-
-def vcomp(html: str, height: int) -> None:
-    """Render one design-exact HTML/SVG block (iframe => hover tooltips work)."""
-    components.html(viz.doc(html), height=height, scrolling=False)
-
-
-def analyst_config() -> LLMConfig:
-    """
-    Build the analyst connection from Streamlit secrets or the environment.
-
-    Nothing about this is user-facing: the app either has keys or it does not,
-    and falls back to the deterministic note when it does not.
+    Excel remains the full-fidelity format. CSV support is deliberately
+    forgiving for users who export a single statement: either the first column
+    contains metric names, or the first column is Year and the remaining
+    columns contain metrics.
     """
     try:
-        secrets = dict(st.secrets)
-    except Exception:                       # noqa: BLE001 - no secrets file present
-        secrets = {}
-    return config_from_env("groq", secrets=secrets)
+        frame = pd.read_csv(BytesIO(raw))
+    except Exception as exc:  # noqa: BLE001 - converted to a user-facing error
+        raise ParseError(f"Could not read this CSV file: {exc}") from exc
+    if frame.empty or len(frame.columns) < 2:
+        raise ParseError("The CSV needs a metric column and at least one year column.")
 
+    first = str(frame.columns[0])
+    if _norm(first) == "year":
+        years = [str(value).strip() for value in frame.iloc[:, 0].tolist()]
+        metrics = frame.iloc[:, 1:].copy()
+        metrics.index = years
+        historical = metrics.T
+    else:
+        metric_col = frame.columns[0]
+        year_labels = [str(column).strip() for column in frame.columns[1:]]
+        historical = frame.set_index(metric_col).iloc[:, :len(year_labels)].copy()
+        historical.columns = year_labels
 
-def step(number: int, label: str) -> None:
-    st.markdown(
-        f'<div class="step"><span class="n">{number}</span>{label}'
-        f'<span class="rule"></span></div>',
-        unsafe_allow_html=True,
+    historical = historical.apply(
+        lambda column: pd.to_numeric(
+            column.astype(str)
+            .str.replace(",", "", regex=False)
+            .str.replace("%", "", regex=False),
+            errors="coerce",
+        )
+    )
+    historical = historical.dropna(axis=0, how="all").dropna(axis=1, how="all")
+    if historical.empty:
+        raise ParseError("No numeric financial rows were found in this CSV.")
+
+    return FinancialModel(
+        company=_clean_name(filename),
+        years=[str(column) for column in historical.columns],
+        historical=historical,
+        sections={str(label): "CSV IMPORT" for label in historical.index},
     )
 
 
-def sidebar() -> tuple[object, str, str]:
-    with st.sidebar:
-        st.markdown(
-            '<div class="side-brand"><div class="side-mark">F</div>'
-            '<div class="txtwrap"><div class="name">FundaCheck</div>'
-            '<div class="tag">FUNDAMENTAL TERMINAL</div></div></div>',
-            unsafe_allow_html=True,
-        )
-
-        # ---- minimize / expand (the design's sidebar toggle) ----
-        # The click is recorded but the rerun is deferred to the very end of the
-        # sidebar (same pattern as navigation below). Rerunning here \u2014 before the
-        # uploader and demo toggle are instantiated \u2014 makes Streamlit discard
-        # their state, which is exactly how minimizing used to throw away the
-        # loaded file / demo model and fall back to the empty landing page.
-        collapsed = bool(st.session_state.get("nav_min", False))
-        toggle_min = st.button("\u00bb" if collapsed else "\u00ab  Minimize",
-                               key="side-min", use_container_width=True)
-
-        # ---- navigation ----
-        current = st.session_state.setdefault("page", "overview")
-        # The click is recorded here but acted on at the very end of the
-        # sidebar. Rerunning from inside this loop would abort the script before
-        # the widgets below (the uploader above all) are instantiated, and
-        # Streamlit discards the state of any widget a run did not render — which
-        # is how navigating between pages used to throw the uploaded file away.
-        navigate_to = None
-        for key, label, icon in NAV_PAGES:
-            shown = icon if collapsed else f"{icon} {label}"
-            active = key == current
-            if st.button(shown, key=f"nav-{key}", use_container_width=True,
-                         type="primary" if active else "secondary",
-                         help=label if collapsed else None):
-                navigate_to = key
-
-        # Day/Night lives in the main-area top bar now (the design puts it there);
-        # only the default is seeded here so the first paint is themed correctly.
-        st.session_state.setdefault("dark_mode", False)
-
-        step(1, "Your data")
-        upload = st.file_uploader(
-            "3-statement model (.xlsx)", type=["xlsx", "xlsm"],
-            label_visibility="collapsed", key="upload",
-            help="Any Screener.in-style workbook.",
-        )
-        # The uploader is the single source of truth for "is a file loaded".
-        # That only holds because every st.rerun() in this app now happens after
-        # the sidebar has fully rendered — a rerun fired before this widget is
-        # instantiated would make Streamlit discard its state, which is exactly
-        # how navigating between pages used to lose the file. Keep it that way.
-        if upload is not None:
-            st.session_state.demo_on = False
-
-        use_sample = st.toggle(
-            "Load the demo model", key="demo_on", disabled=upload is not None,
-            help="A real 3-statement model, if you want to try FundaCheck "
-                 "before uploading your own.",
-        )
-
-        if upload is not None:
-            source, source_label = upload.getvalue(), upload.name
-        elif use_sample:
-            source, source_label = SAMPLE, "Demo model"
-        else:
-            source, source_label = None, ""
-
-        if source is not None:
-            st.markdown(
-                f'<div class="loaded-chip"><span class="dot"></span>'
-                f'<span class="txt"><b>{source_label}</b></span></div>',
-                unsafe_allow_html=True,
-            )
-
-        step(2, "Sector lens")
-        choices = sector_choices()
-        keys = [k for k, _ in choices]
-        # Held in a plain state key rather than the widget's own key: Streamlit
-        # forbids writing to a widget key once the widget exists, and detection
-        # (in main(), after the workbook loads) has to be able to set it.
-        preferred = st.session_state.setdefault("sector_pref", "generic")
-        sector_key = st.selectbox(
-            "Sector", options=keys, format_func=lambda k: dict(choices)[k],
-            index=keys.index(preferred) if preferred in keys else 0,
-            label_visibility="collapsed",
-            help="Benchmarks and pillar weights change with the sector.",
-        )
-        st.session_state.sector_pref = sector_key
-        st.caption(get_sector(sector_key).notes)
-
-        # Visible build stamp: lets you confirm at a glance whether the browser is
-        # showing the freshly deployed code or a stale cached view.
-        st.markdown(
-            f'<div style="margin-top:14px;font-family:ui-monospace,Menlo,monospace;'
-            f'font-size:10px;letter-spacing:.6px;color:#6f7a74">'
-            f'BUILD {BUILD_TAG}</div>',
-            unsafe_allow_html=True,
-        )
-
-    # Both reruns are deferred to here, after every sidebar widget (uploader,
-    # demo toggle, sector) has been instantiated, so their state survives.
-    if toggle_min:
-        st.session_state.nav_min = not collapsed
-        st.rerun()
-    if navigate_to and navigate_to != current:
-        st.session_state.page = navigate_to
-        st.rerun()
-
-    C.set_theme("dark" if st.session_state.get("dark_mode") else "light")
-    return source, sector_key, source_label
-
-
-# --------------------------------------------------------------------------
-# page sections
-# --------------------------------------------------------------------------
-def _export_report(model, result) -> bytes:
-    """The Export Report button: one PDF snapshotting every section."""
+def _load_source(raw: bytes, filename: str) -> FinancialModel:
+    suffix = Path(filename).suffix.lower()
+    if suffix == ".csv":
+        return _csv_model(raw, filename)
+    if suffix not in {".xlsx", ".xlsm"}:
+        raise ParseError("Please upload an .xlsx, .xlsm, or .csv file.")
     try:
-        return REP.build_pdf(model, result)
-    except Exception as exc:                        # noqa: BLE001 - never block UI
-        LOGGER.exception("PDF export failed")
-        st.warning(f"PDF export failed, falling back to a plain-text report. ({exc})")
-        lines = [
-            f"FundaCheck report - {model.company.title()}",
-            f"Sector lens : {result.sector.name}",
-            f"Score       : {result.total_score:.0f}/100 ({result.verdict})",
-            "",
-        ]
-        for m in result.metrics:
-            lines.append(f"{S.short_name(m.metric):<28}{m.display(m.latest):>14}"
-                         f"  score {round(m.score)}")
-        return "\n".join(lines).encode()
+        return load_model(BytesIO(raw))
+    except ParseError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - keep the API error readable
+        raise ParseError(f"Could not read this workbook: {exc}") from exc
 
 
-def _get_note(model, result, sector_key: str, config: LLMConfig) -> dict:
-    """
-    The analyst note is written once per loaded workbook: it is cached in
-    session state against a fingerprint of the model, so reruns and page
-    switches never re-call the LLM. Upload a different file (or change the
-    sector lens) and it writes a fresh one.
-    """
-    fingerprint = "|".join([
-        model.company, sector_key, f"{result.total_score:.1f}",
-        str(len(result.metrics)), str(model.years[0]), str(model.latest_year),
-    ])
-    if st.session_state.get("note_fp") == fingerprint \
-            and isinstance(st.session_state.get("note"), dict):
-        return st.session_state["note"]
-    with st.spinner("Writing the analyst note…"):
-        note = analyse(result, config)
-    st.session_state["note"] = note
-    st.session_state["note_fp"] = fingerprint
-    return note
-
-
-def _render_shell(html: str, height: int) -> None:
-    """
-    One design-exact page, top to bottom, in a single frame.
-
-    scrolling=True is the safety net: if a workbook renders taller than the
-    estimated height, the frame scrolls instead of clipping content, while the
-    tuned heights keep the empty overshoot minimal.
-    """
-    components.html(html, height=height, scrolling=True)
-
-
-def _page_header(title: str, subtitle: str) -> None:
-    st.markdown(
-        f'<div style="display:flex;align-items:baseline;gap:14px;'
-        f'padding:2px 4px 0;flex-wrap:wrap">'
-        f'<span style="font-size:26px;font-weight:800;'
-        f'letter-spacing:-.7px;color:#15201a">{title}</span>'
-        f'<span style="font-size:13.5px;color:#8b918e">{subtitle}</span>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-
-def ratios_tab(model, result) -> None:
-    """Ratio deep dive - the reference section, one shell, hover everywhere."""
-    html, height = SH.ratios_shell(model, result)
-    _render_shell(html, height)
-
-def statements_tab(model) -> None:
-    """Statements - pill tabs + % change table inside the design shell."""
-    query = (st.session_state.get("search_q") or "").strip().lower()
-    html, height = SH.statements_shell(model, query)
-    _render_shell(html, height)
-
-def sector_lens_tab(model, result) -> None:
-    """Sector lens - the reference section, one shell."""
-    html, height = SH.sector_shell(model, result)
-    _render_shell(html, height)
-
-def qa_tab(result, config: LLMConfig) -> None:
-    _page_header("Ask the analyst",
-                 "Answers grounded only in the loaded model.")
-    with card("Ask the analyst"):
-        st.caption(
-            "Free-text questions about the loaded company. The model only sees the "
-            "scored ratios and the sector profile, so it cannot invent outside facts."
-        )
-        suggestions = [
-            "Is the debt load sustainable given the cash flows?",
-            "What single ratio would change the verdict fastest?",
-            "How would this company look if it were an IT services firm instead?",
-        ]
-        picked = st.radio("Suggested questions", suggestions, horizontal=False, index=None,
-                          label_visibility="collapsed")
-        question = st.text_input(
-            "Your question", value=picked or "",
-            placeholder="e.g. why is the return profile weak despite profit growth?",
-            label_visibility="collapsed",
-        )
-        if st.button("Ask", type="primary") and question.strip():
-            with st.spinner("Analysing…"):
-                answer = answer_question(result, question.strip(), config)
-                vcomp(f'<div style="font-size:13.5px;line-height:1.65;'
-                      f'color:#3f4744;padding:4px 2px">{answer}</div>', 180)
-
-
-# SPLICE_END
-
-# --------------------------------------------------------------------------
-# main
-# --------------------------------------------------------------------------
-@st.cache_data(show_spinner=False)
-def _load(file_bytes: bytes | None, path: str | None):
-    return load_model(path) if path else load_model(pd.io.common.BytesIO(file_bytes))
-
-
-def main() -> None:
-    mode = "dark" if st.session_state.get("dark_mode", False) else "light"
-    inject_css(mode, minimized=bool(st.session_state.get("nav_min", False)))
-    source, sector_key, source_label = sidebar()
-    # Keys live in the deployment's secret store, never in the UI or the repo.
-    config = analyst_config()
-
-    if source is None:
-        st.markdown(
-            '<div class="masthead"><h1>FundaCheck</h1>'
-            '<div class="sub">UPLOAD A 3-STATEMENT MODEL TO BEGIN</div></div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            '<div class="empty-hero"><div class="glyph">◈</div>'
-            "<h3>Drop a 3-statement model into the sidebar</h3>"
-            "<p>Any Screener.in-style workbook works — it needs a <b>HistoricalFS</b> "
-            "sheet and, ideally, a <b>Ratio Analysis</b> sheet. Nothing is uploaded "
-            "anywhere: the file is parsed in memory for this session only.</p>"
-            '<div class="empty-steps"><div>1 · Upload the .xlsx</div>'
-            "<div>2 · Pick the sector</div><div>3 · Read the verdict</div></div></div>",
-            unsafe_allow_html=True,
-        )
-        return
-
-    try:
-        if isinstance(source, (bytes, bytearray)):
-            model = _load(bytes(source), None)
-        else:
-            model = _load(None, str(source))
-    except ParseError as exc:
-        st.error(f"That workbook could not be read: {exc}")
-        return
-    except Exception as exc:                       # noqa: BLE001
-        st.error(f"Unexpected problem reading the workbook: {exc}")
-        return
-
-    # Fill in any benchmark ratio the workbook did not supply, computed from
-    # its own statements, so a formulas-only export still analyses.
-    derived = fill_missing_ratios(model)
-    if derived:
-        LOGGER.info("derived %d ratios for %s", len(derived), model.company)
-
-    # A new workbook gets its sector detected once; after that the dropdown is
-    # the source of truth, so changing it by hand sticks.
-    if st.session_state.get("detected_for") != model.company:
-        detected, why = detect_sector(model.company, {
+def _detect(model: FinancialModel) -> tuple[str, str]:
+    return detect_sector(
+        model.company,
+        {
             "Debt to Equity Ratio": model.latest("Debt to Equity Ratio"),
             "Interest % Sales": model.latest("Interest % Sales"),
             "EBITDA Margin": model.latest("EBITDA Margin"),
             "Fixed Asset Turnover": model.latest("Fixed Asset Turnover"),
             "Net Profit Margin": model.latest("Net Profit Margin"),
-        })
-        st.session_state.detected_for = model.company
-        st.session_state.sector_pref = detected
-        LOGGER.info("sector detected for %s: %s (%s)", model.company, detected, why)
-        st.rerun()
+        },
+    )
 
-    sector = get_sector(sector_key)
-    try:
-        result = assess(model, sector)
-    except ValueError as exc:
-        st.error(str(exc))
-        return
 
-    page = st.session_state.get("page", "overview")
+def _metric(result: Assessment, *names: str):
+    for name in names:
+        found = result.metric(name)
+        if found is not None:
+            return found
+    return None
 
-    if page == "overview":
-        note = _get_note(model, result, sector_key, config)
-        peers = st.session_state.setdefault("peers", [])
-        html, height = SH.dashboard_shell(model, result, note, peers)
-        _render_shell(html, height)
-        if note.get("_error"):
-            st.caption(f"AI analyst unreachable ({note['_error']}) - showing the "
-                       "rule-based reading.")
-        if result.data_gaps:
-            st.caption(
-                "Metrics not found in this workbook (excluded from the score): "
-                + ", ".join(result.data_gaps)
-            )
-    elif page == "ratios":
-        ratios_tab(model, result)
-    elif page == "lens":
-        sector_lens_tab(model, result)
-    elif page == "statements":
-        statements_tab(model)
+
+def _series(model: FinancialModel, *names: str) -> list[float | None]:
+    for name in names:
+        series = pd.to_numeric(model.series(name), errors="coerce")
+        if not series.empty:
+            return [
+                _number(series.get(year)) if year in series.index else None
+                for year in model.years
+            ]
+    return [None for _ in model.years]
+
+
+def _metric_json(metric) -> dict[str, Any]:
+    if metric is None:
+        return {}
+    return {
+        "metric": metric.metric,
+        "pillar": metric.pillar,
+        "latest": _number(metric.latest),
+        "average3y": _number(metric.average_3y),
+        "weakAt": _number(metric.weak_at),
+        "strongAt": _number(metric.strong_at),
+        "score": round(float(metric.score), 1),
+        "trend": round(float(metric.trend), 4),
+        "verdict": metric.verdict,
+        "lowerIsBetter": bool(metric.lower_is_better),
+        "displayLatest": metric.display(metric.latest),
+        "displayStrongAt": metric.display(metric.strong_at),
+        "displayWeakAt": metric.display(metric.weak_at),
+    }
+
+
+def _value_json(model: FinancialModel, *names: str) -> dict[str, Any]:
+    for name in names:
+        series = pd.to_numeric(model.series(name), errors="coerce")
+        if not series.empty:
+            return {
+                "value": _number(series.iloc[-1]),
+                "series": _series(model, name),
+                "source": name,
+            }
+    return {"value": None, "series": [None for _ in model.years], "source": None}
+
+
+def _statement_rows(model: FinancialModel, tab: str) -> list[dict[str, Any]]:
+    if tab in {"Income Statement", "Ratio Analysis", "Common Size"}:
+        rows = S.stmt_source(model, tab)
     else:
-        qa_tab(result, config)
+        keywords = (
+            ("asset", "liabil", "borrow", "equity", "reserve", "capital",
+             "receiv", "inventory", "cash", "net block", "investment", "payable")
+            if tab == "Balance Sheet"
+            else ("cash", "operating", "investing", "financing", "dividend", "flow")
+        )
+        rows = []
+        for label in model.historical.index:
+            name = str(label)
+            lowered = name.lower()
+            if not any(keyword in lowered for keyword in keywords):
+                continue
+            series = pd.to_numeric(model.historical.loc[label], errors="coerce")
+            values = [
+                _number(series.get(year)) if year in series.index else None
+                for year in model.years
+            ]
+            if any(value is not None for value in values):
+                rows.append((name, values, name.lower().startswith("total")))
+    return [
+        {
+            "name": name,
+            "values": [_number(value) for value in values],
+            "headline": bool(headline),
+        }
+        for name, values, headline in rows
+    ]
+
+
+def _metric_json_for_sector(metric, latest: float | None, benchmark: float | None) -> dict[str, Any]:
+    return {
+        "company": _number(latest),
+        "benchmark": _number(benchmark),
+        "companyDisplay": metric.display(latest) if latest is not None else "—",
+        "benchmarkDisplay": metric.display(benchmark) if benchmark is not None else "—",
+    }
+
+
+def _sector_rows(result: Assessment) -> list[dict[str, Any]]:
+    specs = [
+        ("ROCE", "Return on Capital Employed (ROCE) %"),
+        ("Operating margin", "EBITDA Margin"),
+        ("Revenue growth", "Sales Growth"),
+        ("Debt / Equity", "Debt to Equity Ratio"),
+        ("Interest coverage", "Interest Coverage Ratio"),
+        ("Cash conversion cycle", "Cash Conversion Cycle"),
+    ]
+    rows = []
+    for label, metric_name in specs:
+        metric = _metric(result, metric_name)
+        if metric is None:
+            continue
+        latest = metric.latest
+        strong = metric.strong_at
+        weak = metric.weak_at
+        if latest is None or strong is None:
+            continue
+        if metric.lower_is_better:
+            company_score = max(0.08, min(1.0, strong / max(abs(latest), 1e-6)))
+            benchmark_score = max(0.08, min(1.0, strong / max(abs(weak), 1e-6)))
+        else:
+            company_score = max(0.08, min(1.0, latest / max(abs(strong), 1e-6)))
+            benchmark_score = 1.0
+        rows.append(
+            {
+                "label": label,
+                "metric": metric_name,
+                "company": _number(latest),
+                "benchmark": _number(strong),
+                "weak": _number(weak),
+                "companyDisplay": metric.display(latest),
+                "benchmarkDisplay": metric.display(strong),
+                "companyScore": round(company_score, 3),
+                "benchmarkScore": round(benchmark_score, 3),
+                "lowerIsBetter": bool(metric.lower_is_better),
+            }
+        )
+    return rows
+
+
+def _peer_rows(model: FinancialModel, result: Assessment) -> list[dict[str, Any]]:
+    """Return honest comparison rows without pretending we fetched peer data."""
+    metrics = {
+        "ROCE": _metric(result, "Return on Capital Employed (ROCE) %"),
+        "Revenue growth": _metric(result, "Sales Growth"),
+        "Debt / Equity": _metric(result, "Debt to Equity Ratio"),
+    }
+    company = {
+        "name": model.company,
+        "kind": "company",
+        "score": round(result.total_score),
+        "values": {
+            label: metric.display(metric.latest) if metric else "—"
+            for label, metric in metrics.items()
+        },
+    }
+    benchmark = {
+        "name": f"{result.sector.name} benchmark",
+        "kind": "benchmark",
+        "score": 66,
+        "values": {
+            label: metric.display(metric.strong_at) if metric else "—"
+            for label, metric in metrics.items()
+        },
+    }
+    return [company, benchmark]
+
+
+def _note(result: Assessment) -> dict[str, Any]:
+    note = offline_note(result)
+    return {
+        "summary": note.get("summary", ""),
+        "sectorContext": note.get("sector_context", ""),
+        "strengths": note.get("strengths", []),
+        "risks": note.get("risks", []),
+        "whatToWatch": note.get("what_to_watch", []),
+        "confidence": note.get("confidence", "medium"),
+        "offline": True,
+    }
+
+
+def serialize_dataset(dataset: dict[str, Any]) -> dict[str, Any]:
+    model: FinancialModel = dataset["model"]
+    result: Assessment = dataset["result"]
+    sector_key = dataset["sector_key"]
+    revenue = _value_json(model, "Sales", "Revenue", "Net Sales")
+    cash_flow = _value_json(
+        model,
+        "Free Cash Flow",
+        "Cash from Operating Activity",
+        "Cash from Operations",
+    )
+    ebitda = _value_json(model, "EBITDA")
+    net_profit = _value_json(model, "Net Profit", "PAT")
+    roce = _metric(result, "Return on Capital Employed (ROCE) %")
+    debt_equity = _metric(result, "Debt to Equity Ratio")
+
+    return {
+        "datasetId": dataset["id"],
+        "sourceLabel": dataset["source_label"],
+        "ai": _analyst_status(),
+        "company": model.company,
+        "years": list(model.years),
+        "latestYear": model.latest_year,
+        "rebuiltFromDataSheet": bool(model.rebuilt_from_data_sheet),
+        "sector": {
+            "key": sector_key,
+            "name": result.sector.name,
+            "notes": result.sector.notes,
+            "peerContext": result.sector.peer_context,
+            "detectedKey": dataset["detected_key"],
+            "detectedWhy": dataset["detected_why"],
+        },
+        "availableSectors": [
+            {"key": key, "name": name} for key, name in sector_choices()
+        ],
+        "score": {
+            "total": result.total_score,
+            "verdict": result.verdict,
+            "headline": result.headline,
+            "pillars": result.pillar_scores,
+            "earningsQuality": _number(result.earnings_quality),
+        },
+        "metrics": [_metric_json(metric) for metric in result.metrics],
+        "strengths": result.strengths,
+        "concerns": result.concerns,
+        "dataGaps": result.data_gaps,
+        "note": _note(result),
+        "kpis": {
+            "revenue": revenue,
+            "ebitda": ebitda,
+            "netProfit": net_profit,
+            "cashFlow": cash_flow,
+            "roce": _metric_json(roce),
+            "debtEquity": _metric_json(debt_equity),
+        },
+        "charts": {
+            "revenue": {"years": list(model.years), "values": revenue["series"]},
+            "cashFlow": {"years": list(model.years), "values": cash_flow["series"]},
+            "roce": {
+                "years": list(model.years),
+                "values": _series(model, "Return on Capital Employed (ROCE) %", "ROCE"),
+            },
+            "operatingMargin": {
+                "years": list(model.years),
+                "values": _series(model, "EBITDA Margin", "EBITDA Margins"),
+            },
+        },
+        "sectorRows": _sector_rows(result),
+        "peerRows": _peer_rows(model, result),
+        "statements": {
+            "Income Statement": _statement_rows(model, "Income Statement"),
+            "Balance Sheet": _statement_rows(model, "Balance Sheet"),
+            "Cash Flow": _statement_rows(model, "Cash Flow"),
+            "Ratio Analysis": _statement_rows(model, "Ratio Analysis"),
+            "Common Size": _statement_rows(model, "Common Size"),
+        },
+        "meta": {
+            "currentPrice": _number(model.meta.get("current_price")),
+            "marketCap": _number(model.meta.get("market_cap")),
+        },
+    }
+
+
+def _create_dataset(model: FinancialModel, source_label: str) -> dict[str, Any]:
+    derived = fill_missing_ratios(model)
+    detected_key, detected_why = _detect(model)
+    result = assess(model, get_sector(detected_key))
+    dataset_id = uuid.uuid4().hex
+    dataset = {
+        "id": dataset_id,
+        "model": model,
+        "result": result,
+        "sector_key": detected_key,
+        "detected_key": detected_key,
+        "detected_why": detected_why,
+        "source_label": source_label,
+        "derived": derived,
+    }
+    DATASETS[dataset_id] = dataset
+    return dataset
+
+
+def _dataset_or_error(dataset_id: str | None):
+    if not dataset_id or dataset_id not in DATASETS:
+        return None, (
+            jsonify({
+                "error": "This analysis session is no longer available. Upload the file again."
+            }),
+            404,
+        )
+    return DATASETS[dataset_id], None
+
+
+def _local_answer(result: Assessment, question: str) -> str:
+    """Useful no-key fallback so the analyst screen works for free."""
+    lowered = question.lower()
+    best = sorted(result.metrics, key=lambda metric: metric.score, reverse=True)
+    worst = sorted(result.metrics, key=lambda metric: metric.score)
+    if any(word in lowered for word in ("strength", "strong", "best")):
+        items = [
+            f"{metric.metric} is {metric.display(metric.latest)} with a {metric.score:.0f}/100 sub-score."
+            for metric in best[:3]
+        ]
+        return "The clearest strengths in the uploaded data are " + "; ".join(items)
+    if any(word in lowered for word in ("risk", "attention", "weak", "concern")):
+        items = [
+            f"{metric.metric} is {metric.display(metric.latest)} with a {metric.score:.0f}/100 sub-score."
+            for metric in worst[:3]
+        ]
+        return "The ratios that deserve the closest attention are " + "; ".join(items)
+    if any(word in lowered for word in ("sector", "peer", "benchmark")):
+        return f"The company scores {result.total_score:.0f}/100 against the {result.sector.name} rule book. {result.sector.notes}"
+    if any(word in lowered for word in ("cash", "free cash", "cfo")):
+        cash_metric = next(
+            (metric for metric in result.metrics if "CFO" in metric.metric), None
+        )
+        if cash_metric:
+            return f"Cash quality is represented by {cash_metric.metric} at {cash_metric.display(cash_metric.latest)}, scoring {cash_metric.score:.0f}/100 against the {result.sector.name} benchmark."
+    return f"{result.company} scores {result.total_score:.0f}/100 and is classified as {result.verdict.lower()} against {result.sector.name} expectations. The result is driven by {', '.join(result.pillar_scores.keys())}."
+
+
+def _analyst_config():
+    """Choose the configured chat provider without exposing credentials."""
+    requested = os.getenv("LLM_PROVIDER", "").strip().lower()
+    requested = {"grok": "xai"}.get(requested, requested)
+    if requested:
+        return config_from_env(requested)
+
+    # Prefer xAI when an xAI key is present, while keeping the existing Groq and
+    # OpenRouter integrations available for deployments that already use them.
+    for provider, env_names in (
+        ("xai", ("XAI_API_KEYS", "XAI_API_KEY")),
+        ("groq", ("GROQ_API_KEYS", "GROQ_API_KEY")),
+        ("openrouter", ("OPENROUTER_API_KEYS", "OPENROUTER_API_KEY")),
+    ):
+        if any(os.getenv(name, "").strip() for name in env_names):
+            return config_from_env(provider)
+    return config_from_env("xai")
+
+
+def _analyst_status(config=None) -> dict[str, Any]:
+    """Return safe connection metadata without ever returning an API key."""
+    config = config or _analyst_config()
+    return {
+        "configured": bool(config.is_live),
+        "provider": config.provider,
+        "model": config.model or None,
+    }
+
+
+@app.get("/")
+def index():
+    return send_from_directory(APP_DIR, "index.html")
+
+
+@app.get("/assets/<path:filename>")
+def assets(filename: str):
+    return send_from_directory(APP_DIR / "assets", filename)
+
+
+@app.get("/api/health")
+def health():
+    return jsonify({
+        "ok": True,
+        "service": "fundacheck",
+        "framework": "flask",
+        "ai": _analyst_status(),
+    })
+
+
+@app.post("/api/analyze")
+def analyze():
+    try:
+        uploaded = request.files.get("file")
+        demo = request.form.get("demo") == "true"
+        if uploaded and uploaded.filename:
+            filename = uploaded.filename
+            raw = uploaded.read()
+            if not raw:
+                return jsonify({"error": "The uploaded file is empty."}), 400
+            model = _load_source(raw, filename)
+            source_label = filename
+        elif demo:
+            model = load_model(SAMPLE)
+            source_label = "Demo model · 3S_model_sample.xlsx"
+        else:
+            return jsonify({"error": "Choose an XLSX, XLSM, or CSV file first."}), 400
+
+        dataset = _create_dataset(model, source_label)
+        return jsonify(serialize_dataset(dataset))
+    except ParseError as exc:
+        return jsonify({"error": str(exc)}), 422
+    except Exception as exc:  # noqa: BLE001 - API never returns a traceback
+        app.logger.exception("analysis failed")
+        return jsonify({"error": f"The analysis could not be completed: {exc}"}), 500
+
+
+@app.post("/api/sector")
+def change_sector():
+    body = request.get_json(silent=True) or {}
+    dataset, error = _dataset_or_error(body.get("datasetId"))
+    if error:
+        return error
+    sector_key = str(body.get("sectorKey") or "generic")
+    profile = get_sector(sector_key)
+    try:
+        dataset["result"] = assess(dataset["model"], profile)
+        valid_keys = {key for key, _ in sector_choices()}
+        dataset["sector_key"] = sector_key if sector_key in valid_keys else "generic"
+        return jsonify(serialize_dataset(dataset))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 422
+
+
+@app.post("/api/ask")
+def ask():
+    body = request.get_json(silent=True) or {}
+    dataset, error = _dataset_or_error(body.get("datasetId"))
+    if error:
+        return error
+    question = str(body.get("question") or "").strip()
+    if not question:
+        return jsonify({"error": "Write a question first."}), 400
+
+    result: Assessment = dataset["result"]
+    config = _analyst_config()
+    provider_error = None
+    using_live_model = False
+    if config.is_live:
+        try:
+            answer = answer_question(result, question, config)
+            using_live_model = True
+        except LLMRequestError as exc:
+            provider_error = str(exc)
+            app.logger.warning("analyst request failed: %s", provider_error)
+            answer = _local_answer(result, question)
+    else:
+        answer = _local_answer(result, question)
+
+    ai_status = _analyst_status(config)
+    if config.is_live:
+        # `configured` only means a key exists; `available` reflects this
+        # request so the UI cannot claim Grok answered when it did not.
+        ai_status["available"] = using_live_model
+    if provider_error:
+        ai_status["error"] = provider_error
+
+    return jsonify(
+        {
+            "answer": answer,
+            "question": question,
+            "grounded": True,
+            "offline": not using_live_model,
+            "ai": ai_status,
+            "provider": config.provider if using_live_model else None,
+            "model": config.model if using_live_model else None,
+            "sources": [
+                "Ratio Analysis · " + result.company,
+                "Sector benchmark rules · " + result.sector.name,
+            ],
+        }
+    )
+
+
+@app.get("/api/report/<dataset_id>")
+def report(dataset_id: str):
+    dataset, error = _dataset_or_error(dataset_id)
+    if error:
+        return error
+    try:
+        pdf = build_pdf(dataset["model"], dataset["result"])
+        return send_file(
+            BytesIO(pdf),
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=f"fundacheck-{_clean_name(dataset['model'].company)}.pdf",
+        )
+    except Exception as exc:  # noqa: BLE001 - keep export failure readable
+        app.logger.exception("report export failed")
+        return jsonify({"error": f"The report could not be exported: {exc}"}), 500
+
+
+@app.errorhandler(413)
+def too_large(_error):
+    return jsonify({"error": "That file is larger than the 25 MB upload limit."}), 413
 
 
 if __name__ == "__main__":
-    main()
+    app.run(
+        host=os.getenv("HOST", "127.0.0.1"),
+        port=int(os.getenv("PORT", "5000")),
+        debug=os.getenv("FLASK_DEBUG", "0") == "1",
+    )

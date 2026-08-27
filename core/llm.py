@@ -8,10 +8,11 @@ to read those numbers *in sector context* and write the paragraph a human
 analyst would write. That ordering matters: the model can never quietly change
 a ratio, so the output stays auditable.
 
-Two free providers are supported out of the box, both with generous free tiers:
+Three providers are supported out of the box:
 
   Groq        - https://console.groq.com/keys      (fast, free)
   OpenRouter  - https://openrouter.ai/keys         (free ':free' models)
+  xAI Grok    - https://console.x.ai                (OpenAI-compatible API)
 
 If no key is configured the terminal still works — it falls back to a written
 summary generated from the scoring engine itself, so the app never hard-fails
@@ -42,6 +43,11 @@ REASONING_MODELS = {
     "deepseek-r1-distill-llama-70b",
 }
 DEFAULT_REASONING_MODEL = "openai/gpt-oss-120b"
+DEFAULT_XAI_MODEL = "grok-4.3"
+
+
+class LLMRequestError(RuntimeError):
+    """A provider request failed after the configured keys were tried."""
 
 
 @dataclass
@@ -54,7 +60,7 @@ class LLMConfig:
     dropping to the offline note.
     """
 
-    provider: str = "groq"          # "groq" | "openrouter" | "offline"
+    provider: str = "groq"          # "groq" | "openrouter" | "xai" | "offline"
     api_keys: list[str] = field(default_factory=list)
     model: str = ""
     temperature: float = 0.2
@@ -64,6 +70,8 @@ class LLMConfig:
         # Enforce reasoning mode at construction, so no call site can opt out.
         if self.provider == "groq" and self.model not in REASONING_MODELS:
             self.model = DEFAULT_REASONING_MODEL
+        elif self.provider == "xai" and not self.model:
+            self.model = DEFAULT_XAI_MODEL
 
     @property
     def api_key(self) -> str:
@@ -101,16 +109,26 @@ PROVIDERS = {
         "key_env": "OPENROUTER_API_KEY",
         "signup": "https://openrouter.ai/keys",
     },
+    "xai": {
+        "label": "Grok (xAI)",
+        "url": "https://api.x.ai/v1/chat/completions",
+        "models": [
+            DEFAULT_XAI_MODEL,
+            "grok-4.3-latest",
+        ],
+        "key_env": "XAI_API_KEY",
+        "signup": "https://console.x.ai",
+    },
 }
 
 
 def _keys_from(source: dict | None, env_name: str) -> list[str]:
     """
-    Collect API keys from Streamlit secrets or the environment.
+    Collect API keys from an optional config mapping or the environment.
 
-    Accepted shapes, in order: a `groq.api_keys` list, a `GROQ_API_KEYS`
-    comma-separated string, or a single `GROQ_API_KEY`. Keys are never held in
-    source — they come from the deployment's secret store.
+    Accepted shapes, in order: a provider `api_keys` list, an `{ENV}_API_KEYS`
+    comma-separated string, or a single `{ENV}_API_KEY`. Keys are never held
+    in the frontend — they come from the deployment's secret store.
     """
     keys: list[str] = []
 
@@ -141,6 +159,7 @@ def _keys_from(source: dict | None, env_name: str) -> list[str]:
 
 def config_from_env(provider: str = "groq", model: str = "",
                     secrets: dict | None = None) -> LLMConfig:
+    """Build a provider config; pass ``provider="xai"`` for Grok (xAI)."""
     spec = PROVIDERS.get(provider)
     if not spec:
         return LLMConfig(provider="offline")
@@ -199,7 +218,60 @@ RATIO DETAIL (latest year, 3-year average, 0-100 sub-score, and the sector's
 weak/strong bands — note the bands are sector-specific, not universal):
 {result.as_prompt_table()}
 
-Write the analyst note as JSON."""
+    Write the analyst note as JSON."""
+
+
+def _safe_error(config: LLMConfig, error: Exception) -> str:
+    """Return a bounded provider error with any configured key removed."""
+    message = str(error).strip() or error.__class__.__name__
+    for key in config.api_keys:
+        if key:
+            message = message.replace(key, "[redacted]")
+    return message[:300]
+
+
+def _message_content(message: dict) -> str:
+    """Normalize string or content-block responses from compatible APIs."""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+    return ""
+
+
+def _unwrap_answer(text: str) -> str:
+    """Turn a JSON-wrapped free-text answer into display-ready prose."""
+    answer = text.strip()
+    if not answer:
+        return answer
+
+    candidate = answer
+    if candidate.startswith("```"):
+        parts = candidate.split("```")
+        if len(parts) >= 3:
+            candidate = parts[1].strip()
+            if candidate.lower().startswith("json"):
+                candidate = candidate[4:].lstrip()
+    try:
+        parsed = json.loads(candidate)
+    except (TypeError, json.JSONDecodeError):
+        return answer
+
+    if isinstance(parsed, dict):
+        for key in ("answer", "note", "response", "text", "content", "message"):
+            value = parsed.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return answer
 
 
 def _post(config: LLMConfig, messages: list[dict]) -> str:
@@ -236,7 +308,7 @@ def _post(config: LLMConfig, messages: list[dict]) -> str:
             message = response.json()["choices"][0]["message"]
             # Reasoning models may return their thinking separately; the answer
             # is always in content.
-            return message.get("content") or ""
+            return _message_content(message)
         if response.status_code in (401, 402, 403, 429):
             last_error = f"{response.status_code} on one key"
             continue        # try the next key in the pool
@@ -318,7 +390,7 @@ def analyse(result: Assessment, config: LLMConfig) -> dict:
         note = _extract_json(_post(config, messages))
     except Exception as exc:                      # noqa: BLE001 - surfaced in the UI
         fallback = offline_note(result)
-        fallback["_error"] = str(exc)
+        fallback["_error"] = _safe_error(config, exc)
         return fallback
 
     note["_offline"] = False
@@ -330,7 +402,8 @@ def answer_question(result: Assessment, question: str, config: LLMConfig) -> str
     """Free-text Q&A about the loaded company (the 'ask the analyst' box)."""
     if not config.is_live:
         return (
-            "The analyst is not connected. Add Groq API keys to the app's secrets "
+            "The analyst is not connected. Add API keys for the selected provider "
+            "to the app's secrets "
             "(see the README) and ask again."
         )
     messages = [
@@ -346,6 +419,9 @@ def answer_question(result: Assessment, question: str, config: LLMConfig) -> str
         {"role": "user", "content": f"{build_user_prompt(result)}\n\nANALYST QUESTION: {question}"},
     ]
     try:
-        return _post(config, messages).strip()
+        answer = _unwrap_answer(_post(config, messages))
     except Exception as exc:                      # noqa: BLE001
-        return f"The model could not be reached: {exc}"
+        raise LLMRequestError(_safe_error(config, exc)) from exc
+    if not answer:
+        raise LLMRequestError("The provider returned an empty answer.")
+    return answer

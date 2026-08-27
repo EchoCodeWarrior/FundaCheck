@@ -6,7 +6,7 @@ model, pick the company's sector, and get an interactive dashboard plus a
 benchmarks rather than one universal rule book.
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-1e6b45)
-![Streamlit](https://img.shields.io/badge/Streamlit-app-37d67a)
+![Flask](https://img.shields.io/badge/Flask-API-147a4b)
 ![License](https://img.shields.io/badge/license-MIT-777)
 
 ---
@@ -33,8 +33,9 @@ FundaCheck keeps one rule book per sector and applies the right one.
 2. **Scores** twelve key ratios against that sector's weak/strong bands, rolls
    them into five pillars (growth, profitability, returns, leverage,
    efficiency) and weights those pillars by what the sector actually rewards.
-3. **Visualises** everything as an interactive dark-terminal dashboard.
-4. **Explains** the result through a free LLM writing a sector-aware analyst
+3. **Visualises** everything as a responsive light/dark dashboard that works on
+   desktop, tablet, and mobile screens.
+4. **Explains** the result through a configured LLM writing a sector-aware analyst
    note — and answers follow-up questions about the loaded company.
 
 ### The core idea, made visible
@@ -51,7 +52,7 @@ removed so the nav can't be dismissed.
 
 | Page | What's in it |
 |---|---|
-| **Dashboard** | Ten headline ratios with their sector verdict, the composite score ring, the analyst note, and a bento grid of ten charts — one per ratio, each in the form that ratio needs |
+| **Dashboard** | Headline ratios with their sector verdict, the composite score ring, the analyst note, and a clean responsive chart layout |
 | **Ratio deep dive** | Every ratio scored 0-100 against its sector band, leverage & solvency, working-capital cycle, and any ratio plotted through time with the sector bands shaded |
 | **Sector lens** | The same company scored under all nine sector rule books, plus a ratio correlation matrix |
 | **Statements** | The parsed sheets as heat-shaded tables, exportable to CSV |
@@ -67,39 +68,56 @@ python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
 pip install -r requirements.txt
-streamlit run app.py
+python app.py
 ```
 
-The app opens at `http://localhost:8501`. A real 3-statement model ships in
+The app opens at `http://127.0.0.1:5000`. A real 3-statement model ships in
 `sample_data/`, so it is usable the moment it starts — no upload needed.
+
+The frontend is plain browser JavaScript and CSS served by Flask. There is no
+Streamlit runtime. The backend keeps uploaded workbooks in memory for the
+current process, and the browser receives an opaque dataset id for subsequent
+sector changes, questions, and PDF export. XLSX, XLSM, and simple metric-by-year
+CSV files are accepted.
 
 ### Connecting the AI analyst
 
-The analyst runs on Groq's free tier with a **reasoning** model
-(`openai/gpt-oss-120b` at high reasoning effort) — the verdict is a judgement
-across a dozen interacting ratios, which is where a model that thinks before
-answering earns its place.
-
-Keys live in the deployment's secret store, never in the UI and never in this
-repository. Copy the example and fill in your own:
+The analyst chat uses xAI's Grok API when an xAI key is configured. The default
+model is `grok-4.3`, sent through xAI's OpenAI-compatible chat endpoint. Create a
+key in the [xAI console](https://console.x.ai), then either copy `.env.example`
+to `.env` and fill in `XAI_API_KEY`, or set `XAI_API_KEY` (or the
+comma-separated `XAI_API_KEYS`) before starting Flask. `.env` is ignored by git
+and loaded automatically:
 
 ```bash
-cp .streamlit/secrets.toml.example .streamlit/secrets.toml
-# then edit it — the file is gitignored
+cp .env.example .env
+# edit .env and add your key
+python app.py
 ```
 
-```toml
-[groq]
-api_keys = ["gsk_first_key", "gsk_second_key"]
+You can also set the variable for one shell session:
+
+```bash
+XAI_API_KEY=xai-your-key-here python app.py
 ```
 
-Two or more keys are supported: free tiers rate-limit per key, so the app moves
-to the next one instead of dropping to its offline note. `GROQ_API_KEYS`
-(comma-separated) works too. On Streamlit Cloud, paste the same block into
-**Settings → Secrets**.
+In PowerShell, use `$env:XAI_API_KEY="xai-your-key-here"` and then run
+`python app.py`.
 
-With no keys configured the app still works end to end — the commentary falls
-back to a deterministic, rule-based note.
+For a deployment, keep the key in its secret store; it is read only by Flask
+and is never sent to the browser. Set `LLM_PROVIDER=xai` (or `grok`) to force
+Grok explicitly. Existing Groq and OpenRouter configurations remain supported;
+when `LLM_PROVIDER` is unset, the server chooses xAI first when an xAI key is
+present, then Groq or OpenRouter if those are configured.
+
+Two or more keys are supported for each provider: when a provider rate-limits a
+key, the app tries the next key instead of dropping to its offline answer.
+
+With no keys configured the app still works end to end — chat falls back to a
+deterministic, rule-based answer.
+
+For a safe connection check, open `/api/health`; its `ai` block reports whether
+the provider is configured and which model is selected, never the key itself.
 
 ## How the score is built
 
@@ -177,14 +195,15 @@ difference between "looks like a dashboard" and "can be trusted":
 ## Project layout
 
 ```
-app.py               Streamlit UI — layout, tabs, and nothing else
+app.py               Flask API and static-file server
 core/
   parser.py          Excel → clean DataFrames (layout-tolerant)
   sectors.py         Nine sector rule books: bands, weights, context notes
   scoring.py         Ratio → sub-score → pillar → verdict engine
-  llm.py             Free LLM clients (Groq / OpenRouter) + offline fallback
-  charts.py          Every Plotly figure, one house style
-assets/style.css     Terminal theme
+  llm.py             LLM clients (xAI Grok / Groq / OpenRouter) + offline fallback
+  charts.py          Legacy chart helpers retained for the report engine
+assets/app.css       Responsive light/dark product UI
+assets/app.js        Browser interactions, charts, upload flow, and navigation
 sample_data/         A real 3-statement model to demo with
 ```
 
@@ -210,7 +229,8 @@ they never contaminate a time series.
 - [ ] Auto-detect the sector from the revenue mix instead of asking
 - [ ] Export the analyst note as a formatted PDF tearsheet
 - [ ] Altman Z-score and Piotroski F-score alongside the composite
-- [ ] A light theme (the dark palette would need re-validating against a light surface, not just flipped)
+- [x] Responsive light and dark themes with mobile navigation
+- [ ] Live peer comparison — add a market-data provider when external data is desired
 
 ---
 

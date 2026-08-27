@@ -389,8 +389,8 @@ def load_model(source: Any) -> FinancialModel:
     """
     Parse an uploaded 3-statement workbook.
 
-    `source` can be a file path or any file-like object (which is what
-    Streamlit's file uploader hands us).
+    `source` can be a file path or any file-like object (which is what the web
+    API passes after receiving an upload).
     """
     book = pd.read_excel(source, sheet_name=None, header=None, engine="openpyxl")
     if not book:
